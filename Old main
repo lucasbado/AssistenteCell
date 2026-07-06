@@ -1,0 +1,375 @@
+import datetime
+import json
+import requests
+from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
+from pydantic import BaseModel, Field
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
+import asyncio
+from fastapi import (
+    FastAPI,
+    Depends,
+    HTTPException,
+    status,
+    BackgroundTasks,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from pydantic import BaseModel, Field
+from typing import Any, Optional, Callable, Awaitable
+from datetime import datetime
+from contextlib import asynccontextmanager
+import time
+import uuid
+
+
+# ESQUEMA UNIVERSAL (A linguagem do nosso sistema)
+class EventoCanonico(BaseModel):
+    id_evento: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    categoria: str          # Roteamento principal
+    pacote_origem: str     # Roteamento secundário/granular
+    conteudo: dict[str, Any]
+    metadados: dict[str, Any] = {}
+
+
+# ==========================================
+# 1. CONFIGURAÇÃO DA BASE DE DADOS (SQLite)
+# ==========================================
+DATABASE_URL = "sqlite:///./agente_local.db"
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+
+class EventoDB(Base):
+    __tablename__ = "eventos_memoria"
+    # Usamos o ID gerado pelo barramento
+    id = Column(String, primary_key=True, index=True)
+    timestamp = Column(DateTime)
+    categoria = Column(String, index=True)
+    pacote = Column(String, index=True)
+    # Guardamos o dicionário complexo como uma string JSON
+    conteudo_json = Column(Text)
+    # (Remova a coluna resposta_ia, pois agora a IA será outro agente separado)
+
+
+Base.metadata.create_all(bind=engine)
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# ==========================================
+# 2. ESQUEMAS (Pydantic)
+# ==========================================
+# ESQUEMA DE ENTRADA (O que o Android manda)
+class EventoCreate(BaseModel):
+    categoria: str          # "MEDIA", "NOTIFICACAO", "APP_FOREGROUND", "SISTEMA"
+    pacote_app: Optional[str] = None
+    conteudo: dict[str, Any] # O Android já entrega o par chave-valor mapeado
+
+
+async def agente_memoria_sqlite(evento: EventoCanonico):
+    """Agente que escuta tudo e grava no banco de dados para a posteridade."""
+    db = SessionLocal()
+    try:
+        novo_registro = EventoDB(
+            id=evento.id_evento,
+            timestamp=evento.timestamp,
+            categoria=evento.categoria,
+            pacote=evento.pacote_origem,
+            conteudo_json=json.dumps(evento.conteudo, ensure_ascii=False),
+        )
+        db.add(novo_registro)
+        db.commit()
+        print(f"💾 [Memória] Evento {evento.id_evento[:8]} arquivado com sucesso.")
+    except Exception as e:
+        db.rollback()
+        print(f"❌ [Memória] Erro ao gravar: {e}")
+    finally:
+        db.close()
+
+
+class EventBus:
+    def __init__(self):
+        self._inscritos: dict[str, list[Callable[[EventoCanonico], Awaitable[None]]]] = {}
+        self._fila = asyncio.Queue()
+
+    def inscrever(self, topico: str, callback: Callable[[EventoCanonico], Awaitable[None]]):
+        if topico not in self._inscritos:
+            self._inscritos[topico] = []
+        self._inscritos[topico].append(callback)
+        print(f"🔗 Novo listener inscrito em: [{topico}]")
+
+    async def publicar(self, evento: EventoCanonico):
+        await self._fila.put(evento)
+        print(f"📥 Evento {evento.id_evento[:8]}... [{evento.categoria}] publicado no barramento.")
+
+    async def iniciar_processamento(self):
+        print("⚙️ Motor do Event Bus iniciado.")
+        while True:
+            evento: EventoCanonico = await self._fila.get()
+            
+            # 1. ROTEAMENTO POR CATEGORIA (Ex: "MEDIA", "NOTIFICACAO")
+            if evento.categoria in self._inscritos:
+                for callback in self._inscritos[evento.categoria]:
+                    asyncio.create_task(callback(evento))
+            
+            # 2. ROTEAMENTO POR PACOTE ESPECÍFICO (Para automações cirúrgicas)
+            if evento.pacote_origem in self._inscritos:
+                for callback in self._inscritos[evento.pacote_origem]:
+                    asyncio.create_task(callback(evento))
+            
+            # 3. ROTEAMENTO GLOBAL (Arquivistas como o SQLite)
+            if "*" in self._inscritos:
+                for callback in self._inscritos["*"]:
+                    asyncio.create_task(callback(evento))
+            
+            self._fila.task_done()
+
+barramento = EventBus()
+
+
+class MotorDeAtencao:
+    def __init__(self):
+        # Memória de curto prazo (Guarda o "O quê" e o "Quando")
+        self.historico_assinaturas = {}
+        self.janela_temporal_app = {}
+
+        # Lixo que não entra no barramento de jeito nenhum
+        self.blacklist = [
+            "android",
+            "com.android.systemui",
+            "sistema_interno",
+            "com.android.providers.downloads",
+        ]
+
+    def aprovar_evento(self, evento: EventoCanonico) -> bool:
+        pacote = evento.pacote_origem.lower()
+
+        # 1. FILTRO DE LIXO ABSOLUTO
+        if pacote in self.blacklist or pacote == "sistema":
+            return False
+
+        # 2. DEDUPLICAÇÃO EXATA (O fim do Loop Infinito)
+        # Cria uma impressão digital única para este evento
+        conteudo_str = str(evento.conteudo.get("texto_bruto", ""))
+        assinatura = f"{pacote}__{conteudo_str}"
+        agora = time.time()
+
+        if assinatura in self.historico_assinaturas:
+            tempo_passado = agora - self.historico_assinaturas[assinatura]
+            if tempo_passado < 45:  # Mesma coisa em menos de 45s? Silencia.
+                print(f"🛑 [Atenção] Evento deduplicado (eco): {pacote}")
+                return False
+
+        # 3. CONTROLE DE FLUXO (Throttling de Mídia)
+        # O Spotify envia dezenas de eventos por minuto atualizando tempo de música
+        if "spotify" in pacote or "youtube" in pacote:
+            if pacote in self.janela_temporal_app:
+                tempo_passado = agora - self.janela_temporal_app[pacote]
+                if (
+                    tempo_passado < 15
+                ):  # Exige 15 segundos de silêncio do app entre atualizações
+                    print(f"🛑 [Atenção] Fluxo bloqueado (spam de mídia): {pacote}")
+                    return False
+
+        # 4. APROVAÇÃO
+        # Se passou por tudo, grava na memória de curto prazo e deixa entrar
+        self.historico_assinaturas[assinatura] = agora
+        self.janela_temporal_app[pacote] = agora
+        return True
+
+
+# Instanciamos o nosso "Porteiro"
+modulo_atencao = MotorDeAtencao()
+
+
+# Instância global
+barramento = EventBus()
+modulo_atencao = MotorDeAtencao()
+
+# ==========================================
+# 🔌 PLUGANDO OS AGENTES NO BARRAMENTO
+# ==========================================
+# O Agente de Memória escuta TUDO ("*")
+barramento.inscrever("*", agente_memoria_sqlite)
+
+
+# ==========================================
+# 3. O CÉREBRO (Integração com Ollama)
+# ==========================================
+async def agente_raciocinio_ollama(evento: EventoCanonico):
+    print(f"🧠 [Raciocínio] A pensar sobre o evento de: {evento.pacote_origem}")
+
+    conteudo_str = evento.conteudo.get("texto_bruto", "")
+
+    system_prompt = """Você é a Ollie, assistente pessoal rodando no PC do usuário.
+Analise a notificação ou evento de tela e decida se deve interagir.
+Responda APENAS em JSON estrito.
+Esquema: {"acao_necessaria": boolean, "mensagem_dinamica": "string" | null}
+Regra: Aja de forma natural, amigável e curta. Não repita informações óbvias, adicione personalidade."""
+
+    payload = {
+        "model": "qwen2.5:7b",
+        "prompt": f"App: {evento.pacote_origem} | Conteúdo: {conteudo_str}",
+        "system": system_prompt,
+        "stream": False,
+        "format": "json",
+        "options": {"num_ctx": 1024, "temperature": 0.3},
+    }
+
+    try:
+        # Como o requests.post trava (é síncrono), rodamos numa thread separada
+        # para não congelar o EventBus enquanto a IA pensa.
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: requests.post(
+                "http://localhost:11434/api/generate", json=payload, timeout=15
+            ),
+        )
+
+        dados_ia = json.loads(response.json().get("response", "{}"))
+
+        if dados_ia.get("acao_necessaria") and dados_ia.get("mensagem_dinamica"):
+            mensagem = dados_ia["mensagem_dinamica"]
+            print(f"🎯 [Raciocínio] Decisão tomada: Enviar notificação -> {mensagem}")
+
+            # Chama o WebSocket diretamente para alertar o celular
+            await central_alertas.alertar_celular(titulo="Ollie", texto=mensagem)
+        else:
+            print("😴 [Raciocínio] Nenhuma ação necessária para este evento.")
+
+    except Exception as e:
+        print(f"❌ [Raciocínio] Falha na inferência: {e}")
+
+
+# ==========================================
+# 4. GERENCIADOR DE WEBSOCKETS
+# ==========================================
+class GerenciadorNotificacoes:
+    def __init__(self):
+        self.conexoes_ativas: list[WebSocket] = []
+
+    async def conectar(self, websocket: WebSocket):
+        await websocket.accept()  # O ÚNICO ACCEPT DEVE FICAR AQUI
+        self.conexoes_ativas.append(websocket)
+        print("✅ Conexão WS salva no Gerenciador!")
+
+    def desconectar(self, websocket: WebSocket):
+        if websocket in self.conexoes_ativas:
+            self.conexoes_ativas.remove(websocket)
+
+    async def alertar_celular(self, titulo: str, texto: str):
+        print(
+            f"📡 [RADAR] Tentando enviar alerta. Conexões ativas no WS: {len(self.conexoes_ativas)}"
+        )
+
+        if not self.conexoes_ativas:
+            print(
+                "⚠️ [ALERTA] O celular mandou o evento HTTP, mas o WebSocket estava desconectado!"
+            )
+
+        for conexao in self.conexoes_ativas:
+            try:
+                # Adicionamos um campo "origem": "Assistente"
+                await conexao.send_json(
+                    {"titulo": titulo, "texto": texto, "origem_sistema": "Assistente"}
+                )
+            except Exception as e:
+                print(f"❌ Erro: {e}")
+
+
+central_alertas = GerenciadorNotificacoes()
+
+
+# O FastAPI precisa iniciar a fila do Barramento junto com o servidor
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Roda antes do servidor começar a aceitar conexões
+    task_barramento = asyncio.create_task(barramento.iniciar_processamento())
+    yield
+    # Roda quando o servidor é desligado
+    task_barramento.cancel()
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.websocket("/ws/teste")
+async def teste_ws(websocket: WebSocket):
+    # Se esta mensagem não aparecer no terminal, o bloqueio é global
+    print("🔍 [TESTE] Pedido de WebSocket bateu na porta!")
+    try:
+        await websocket.accept()
+        print("✅ [TESTE] WebSocket aceito com sucesso!")
+        await websocket.send_json(
+            {"titulo": "Teste", "texto": "Conexão limpa funcionando!"}
+        )
+        while True:
+            await websocket.receive_text()
+    except Exception as e:
+        print(f"❌ [TESTE] Erro: {e}")
+
+
+# Mantenha o gerenciador definido antes da rota
+@app.websocket("/ws/alertas")
+async def websocket_endpoint(websocket: WebSocket):
+    print("🚀 Bateu na porta do WebSocket!")
+    await central_alertas.conectar(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+    except WebSocketDisconnect:
+        central_alertas.desconectar(websocket)
+        print("🔌 Celular desconectou")
+    except Exception as e:
+        print(f"❌ Erro interno no WS: {e}")
+
+
+# ==========================================
+# 5. INICIALIZAÇÃO DA API (FastAPI)
+# ==========================================
+
+
+@app.get("/testar-alerta")
+async def testar_alerta():
+    await central_alertas.alertar_celular(
+        "Teste", "Se leres isto, o WebSocket funciona!"
+    )
+    return {"status": "disparado"}
+
+
+@app.post("/eventos", status_code=status.HTTP_202_ACCEPTED)
+async def receber_evento(evento: EventoCreate):
+    pacote = evento.pacote_app.lower() if evento.pacote_app else "sistema"
+    categoria_padrao = evento.categoria.upper()
+
+    # Monta o contrato canônico
+    evento_canonico = EventoCanonico(
+        categoria=categoria_padrao,
+        pacote=pacote,
+        payload=evento.conteudo
+    )
+
+    # O Módulo de Atenção avalia se deixa passar (Aplica Throttling e Deduplicação)
+    # *Nota: Dentro do seu MotorDeAtencao, lembre-se de adaptar a leitura 
+    # para usar `evento.categoria` e `evento.conteudo` estruturado.*
+    if not modulo_atencao.aprovar_evento(evento_canonico):
+        return {"status": "ignorado_pela_atencao"}
+
+    await barramento.publicar(evento_canonico)
+
+    return {
+        "sucesso": True, 
+        "id_evento": evento_canonico.id_evento, 
+        "status": "evento_publicado"
+    }
