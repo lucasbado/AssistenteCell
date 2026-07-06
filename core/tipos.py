@@ -7,6 +7,7 @@ class CategoriaEvento(str, Enum):
 class TipoAcao(str, Enum):
     INTENCAO_INTERACAO = "INTENCAO_INTERACAO"
     EVENTO_COMPLEXO = "EVENTO_COMPLEXO"
+    NORMAL = "NORMAL"  # Adicionei o atributo 'NORMAL' à enumeração 'TipoAcao'
 
 class PrioridadeEvento(int, Enum):
     BAIXO = 1
