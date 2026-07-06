@@ -1,5 +1,4 @@
 import asyncio
-from collections import defaultdict
 
 class AgenteNotificacoes:
     def __init__(self):
