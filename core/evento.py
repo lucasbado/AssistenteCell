@@ -21,7 +21,7 @@ class EventoCanonico(BaseModel):
     acao: TipoAcao = TipoAcao.NORMAL
     origem: OrigemEvento
     prioridade: PrioridadeEvento = PrioridadeEvento.NORMAL
-    estado: EstadoEvento = EstadoEvento.NOVO
+    estado: EstadoEvento = EstadoEvento.NOVO # type: ignore
     pacote: str
     
     payload: dict[str, Any] = Field(default_factory=dict)

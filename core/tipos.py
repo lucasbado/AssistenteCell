@@ -3,24 +3,30 @@ from enum import Enum
 class CategoriaEvento(str, Enum):
     MEDIA = "MEDIA"
     APP_FOREGROUND = "APP_FOREGROUND"
+    NOTIFICACAO = "NOTIFICACAO"
 
 class TipoAcao(str, Enum):
+    NORMAL = "NORMAL"
     INTENCAO_INTERACAO = "INTENCAO_INTERACAO"
     EVENTO_COMPLEXO = "EVENTO_COMPLEXO"
-    NORMAL = "NORMAL"  # Adicionei o atributo 'NORMAL' à enumeração 'TipoAcao'
+    INTENCAO_RACIOCINIO = "INTENCAO_RACIOCINIO"
 
 class PrioridadeEvento(int, Enum):
-    BAIXO = 1
-    MEDIUM = 2
-    ALTO = 3
+    BAIXA = 1
+    NORMAL = 2
+    ALTA = 3
 
 class OrigemEvento(str, Enum):
     KERNEL = "KERNEL"
-    AGENTE = "AGENTE"
+    USUARIO = "USUARIO"
+    ANDROID = "ANDROID"
+    IA = "IA"
 
 class EstadoEvento(str, Enum):
+    NOVO = "NOVO"
     PENDENTE = "PENDENTE"
-    PROCESSADO = "PROCESSADO"
+    PROCESSANDO = "PROCESSANDO"
+    CONCLUIDO = "CONCLUIDO"
 
 class TipoEntidade(str, Enum):
     ARTISTA = "ARTISTA"
