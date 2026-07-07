@@ -99,7 +99,7 @@ class KernelCognitivo:
 
             _, _, evento = await self._fila.get()
 
-            evento.estado = EstadoEvento.EM_PROCESSAMENTO
+            evento.estado = EstadoEvento.PROCESSANDO
 
             try: # O try/except garante que o Kernel nunca pare, mesmo que um agente falhe
                 await self._despachar(evento)

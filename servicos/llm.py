@@ -128,19 +128,20 @@ Esquema:
         pacote: str,
     ) -> EntidadeSemantica:
 
-        system = """
-Você classifica aplicativos Android.
+        system = """Você classifica aplicativos Android a partir do nome do pacote.
+
+O atributo "nome" deve ser o nome de exibição do aplicativo (ex: "WhatsApp", "Instagram").
+O atributo "chave" deve ser o próprio nome do pacote.
 
 Responda apenas JSON.
 
 {
     "tipo":"APP",
-    "chave":"",
+    "chave":"com.exemplo.app",
     "atributos":{
-
-        "categoria":"",
-
-        "descricao":""
+        "nome": "Nome do App",
+        "categoria":"Produtividade",
+        "descricao":"Breve descrição do que o app faz."
     }
 }
 """
@@ -148,6 +149,9 @@ Responda apenas JSON.
         prompt = f"Pacote Android: {pacote}"
 
         dados = self._gerar_json(prompt, system)
+
+        # Garante que a chave seja o pacote, caso a LLM não o faça.
+        dados['chave'] = pacote
 
         return EntidadeSemantica.model_validate(dados)
     
@@ -199,6 +203,10 @@ APP_FOREGROUND
 Se não houver informação suficiente para criar uma mensagem útil,
 retorne: "acao_necessaria": false
 
+Se você precisar de informações externas (da internet) para responder,
+retorne: "contexto_extra": {"precisa_pesquisar": true, "query": "sua pergunta aqui"}
+e "acao_necessaria": false.
+
 Nunca invente dados.
 
 Retorne SOMENTE JSON válido.
@@ -232,6 +240,33 @@ Formato:
                 "acao_necessaria": False,
                 "contexto_extra": {"erro": str(e)}
             }
+
+    async def resumir_perfil_usuario(self, dados_perfil_texto: str) -> dict:
+        """
+        Recebe uma lista de fatos sobre o usuário e gera um resumo em linguagem natural.
+        """
+        system = """Você é um psicólogo e analista de comportamento.
+Sua tarefa é analisar uma lista de fatos brutos sobre um usuário e criar um resumo conciso e perspicaz sobre seus hábitos e personalidade.
+
+Seja direto e informativo. Use um tom amigável.
+O objetivo é mostrar ao usuário o que o sistema aprendeu sobre ele.
+
+Responda APENAS com um JSON no seguinte formato:
+{
+    "resumo": "..."
+}"""
+        prompt = f"""
+Analise os seguintes fatos sobre o usuário e crie um resumo:
+
+{dados_perfil_texto}
+"""
+        try:
+            dados = self._gerar_json(prompt, system)
+            dados.setdefault("resumo", "Não foi possível gerar um resumo no momento.")
+            return dados
+        except Exception as e:
+            logger.error(f"Erro ao resumir perfil de usuário: {e}")
+            return {"resumo": f"Ocorreu um erro ao tentar analisar o perfil: {e}"}
 
     # =====================================================
     # CONTATOS

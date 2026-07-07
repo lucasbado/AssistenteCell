@@ -1,0 +1,76 @@
+"""
+api/perfil.py
+
+Endpoints para interagir com o perfil do usuário.
+"""
+from fastapi import APIRouter, status
+from pydantic import BaseModel, Field
+from typing import List
+
+from core.kernel import kernel
+from core.evento import EventoCanonico
+from core.tipos import CategoriaEvento, OrigemEvento, TipoAcao, PrioridadeEvento
+from servicos.memoria_perfil import memoria_perfil
+
+router = APIRouter(prefix="/perfil", tags=["Perfil"])
+
+# --- Modelos de Resposta para o endpoint analítico ---
+
+class ItemPerfil(BaseModel):
+    item: str = Field(..., description="O valor do item, ex: com.whatsapp ou 'Staind'")
+    confianca: float = Field(..., description="Confiança do sistema neste fato (0.0 a 1.0)")
+    score: int = Field(..., description="Score bruto de interações, indicando frequência")
+
+class RotinaMusical(ItemPerfil):
+    periodo: str = Field(..., description="Período do dia da rotina (MANHA, TARDE, NOITE, MADRUGADA)")
+
+class PerfilAnaliticoResponse(BaseModel):
+    apps_mais_usados: List[ItemPerfil]
+    contatos_mais_frequentes: List[ItemPerfil]
+    rotinas_musicais: List[RotinaMusical]
+
+
+@router.post("/resumo", status_code=status.HTTP_202_ACCEPTED)
+async def solicitar_resumo_perfil():
+    """
+    Dispara um evento para que o sistema gere um resumo do perfil do usuário
+    e o envie como uma notificação.
+    """
+    evento_comando = EventoCanonico(
+        categoria=CategoriaEvento.SISTEMA_COMANDO_USUARIO,
+        acao=TipoAcao.GERAR_RESUMO_PERFIL,
+        origem=OrigemEvento.USUARIO,
+        pacote="br.com.ollie.interface",
+        prioridade=PrioridadeEvento.ALTA,
+    )
+    await kernel.publicar(evento_comando)
+    return {"status": "solicitacao_de_resumo_enfileirada", "id": evento_comando.id}
+
+@router.get("/analitico", response_model=PerfilAnaliticoResponse)
+async def obter_perfil_analitico():
+    """
+    Retorna uma visão analítica e estruturada do perfil do usuário,
+    com dados sobre hábitos, rotinas e preferências para serem exibidos no frontend.
+    """
+    # Usamos uma confiança menor para capturar mais dados para análise
+    fatos_perfil = await memoria_perfil.obter_perfil_completo(confianca_minima=0.2)
+
+    apps = []
+    contatos = []
+    musica = []
+
+    for fato in fatos_perfil:
+        if fato.categoria == "APP_USO":
+            apps.append(ItemPerfil(item=fato.valor, confianca=fato.confianca, score=fato.score))
+        elif fato.categoria == "CONTATO_INTERACAO":
+            contatos.append(ItemPerfil(item=fato.valor, confianca=fato.confianca, score=fato.score))
+        elif fato.categoria.startswith("ARTISTA_PREFERENCIA_"):
+            # Extrai o período do dia da categoria, ex: 'ARTISTA_PREFERENCIA_NOITE' -> 'NOITE'
+            periodo = fato.categoria.split('_')[-1]
+            musica.append(RotinaMusical(item=fato.valor, confianca=fato.confianca, score=fato.score, periodo=periodo))
+
+    return PerfilAnaliticoResponse(
+        apps_mais_usados=sorted(apps, key=lambda x: x.score, reverse=True),
+        contatos_mais_frequentes=sorted(contatos, key=lambda x: x.score, reverse=True),
+        rotinas_musicais=sorted(musica, key=lambda x: x.score, reverse=True)
+    )

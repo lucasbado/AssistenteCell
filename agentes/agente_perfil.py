@@ -1,41 +1,60 @@
 """
 agentes/agente_perfil.py
+
+Agente responsável por observar eventos e registrar interações
+na memória de perfil de longo prazo, construindo um modelo
+estatístico do usuário.
 """
-from __future__ import annotations
+import logging
+
 from core.evento import EventoCanonico
+from core.tipos import CategoriaEvento
+from servicos.memoria_perfil import memoria_perfil
 from servicos.catalogo_semantico import catalogo
-from servicos.memoria_perfil import MemoriaPerfil
+
+logger = logging.getLogger(__name__)
+
+# A heurística estática KNOWN_APP_TITLES foi removida em favor de uma
+# abordagem dinâmica que consulta o Catálogo Semântico para identificar apps.
 
 class AgentePerfil:
-
+    """
+    Este agente é um dos primeiros no pipeline. Sua função é observar
+    o fluxo de eventos brutos e atualizar a MemoriaPerfil com
+    estatísticas de uso, formando a base do aprendizado de longo prazo
+    sobre os hábitos do usuário.
+    """
     async def processar(self, evento: EventoCanonico):
-        if evento.categoria == "MEDIA":
-            await self._processar_midia(evento)
-        elif evento.categoria == "APP_FOREGROUND":
-            await self._processar_app(evento)
+        # Registra o uso de um app sempre que ele está em primeiro plano
+        if evento.categoria == CategoriaEvento.APP_FOREGROUND:
+            if evento.pacote:
+                await memoria_perfil.registrar_uso_app(evento.pacote)
 
-    async def _processar_midia(self, evento: EventoCanonico):
-        artista_nome = evento.payload.get("artista")
-        if not artista_nome:
-            return
+        # Registra a escuta de um artista
+        elif evento.categoria == CategoriaEvento.MEDIA:
+            artista = evento.payload.get("artista")
+            if artista:
+                await memoria_perfil.registrar_escuta_artista(artista, evento.timestamp)
 
-        # 1. Consulta o mundo (Semântica) via Ollama/Cache
-        entidade_artista = catalogo.obter_artista(artista_nome)
-        genero = entidade_artista.atributos.get("genero")
+        # Registra uma interação a partir de uma notificação
+        elif evento.categoria == CategoriaEvento.NOTIFICACAO:
+            remetente = evento.payload.get("titulo")
+            # É necessário ter o pacote para identificar a origem da notificação
+            if not remetente or not evento.pacote:
+                return
 
-        # 2. Atualiza o usuário (Perfil)
-        perfil.incrementar("ARTISTA_FAVORITO", artista_nome)
-        if genero:
-            perfil.incrementar("GENERO_MUSICAL", genero)
+            # MELHORIA: A heurística para diferenciar uma notificação de app (ex: "Instagram")
+            # de uma notificação de contato (ex: "João da Silva") agora é dinâmica.
+            app_entity = await catalogo.obter_app(evento.pacote)
+            app_nome_canonico = None
+            if app_entity and app_entity.atributos:
+                app_nome_canonico = app_entity.atributos.get("nome")
 
-    async def _processar_app(self, evento: EventoCanonico):
-        pacote = evento.pacote
-        
-        # 1. Consulta o que é esse app
-        entidade_app = await catalogo.obter_app(pacote)
-        categoria_app = entidade_app.atributos.get("categoria")
-
-        # 2. Atualiza o hábito do usuário
-        perfil.incrementar("USO_APP", pacote)
-        if categoria_app:
-            perfil.incrementar("USO_CATEGORIA_APP", categoria_app)
+            # Se o remetente da notificação for o próprio nome canônico do app,
+            # registramos como um evento de uso do app.
+            if app_nome_canonico and remetente.lower() == app_nome_canonico.lower():
+                await memoria_perfil.registrar_uso_app(evento.pacote)
+            else:
+                # Caso contrário (remetente diferente do nome do app ou app não catalogado),
+                # assumimos que é uma interação com um "contato" (pessoa, grupo, etc.).
+                await memoria_perfil.registrar_interacao_contato(remetente)

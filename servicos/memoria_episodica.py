@@ -85,3 +85,30 @@ class MemoriaEpisodica:
                 }
                 for e in eventos_db
             ]
+
+    async def obter_evento_original_por_correlacao(self, correlacao_id: str) -> dict | None:
+        """
+        Recupera o primeiro evento (o original) de uma cadeia de correlação.
+        Essencial para que agentes de síntese possam re-analisar o contexto inicial
+        após receberem informações adicionais (ex: de uma pesquisa na web).
+        """
+        async with AsyncSessionLocal() as session:
+            stmt = (
+                select(EventoEpisodicoDB)
+                .where(EventoEpisodicoDB.correlacao_id == correlacao_id)
+                .order_by(EventoEpisodicoDB.timestamp.asc())
+                .limit(1)
+            )
+            resultado = await session.execute(stmt)
+            evento_db = resultado.scalars().first()
+
+            if not evento_db:
+                return None
+            
+            # Reconstroi um dicionário parecido com o EventoCanonico para o AgenteRaciocinio
+            return {
+                "id": evento_db.id,
+                "categoria": evento_db.tipo,
+                "pacote": evento_db.payload.get("pacote"),
+                "payload": evento_db.payload,
+            }

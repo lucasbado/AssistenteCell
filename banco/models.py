@@ -46,3 +46,16 @@ class PerfilUsuarioDB(Base):
     
     # CRUCIAL: Timestamp para o Agente de Memória aplicar fórmulas de esquecimento (Decay)
     ultima_atualizacao = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+class MemoriaTrabalhoDB(Base):
+    """
+    MEMÓRIA DE TRABALHO (Short-Term / Working Memory).
+    Armazena contexto ativo sobre conversas e tarefas em andamento.
+    Possui um mecanismo de esquecimento para se manter relevante.
+    """
+    __tablename__ = "memoria_trabalho"
+    id = Column(Integer, primary_key=True)
+    chave_conversa = Column(String(255), unique=True, index=True) # Ex: 'whatsapp::minha fadona❤️'
+    resumo_contexto = Column(JSON) # Lista de mensagens recentes ou um resumo da LLM
+    relevancia = Column(Float, default=0.0, index=True)
+    ultima_interacao = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

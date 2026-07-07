@@ -5,21 +5,43 @@ Camada 2: Reflexo. Decide sobre eventos com base em regras, estatísticas e
 padrões simples, sem usar a LLM. É rápido e eficiente.
 """
 
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
+
 from core.evento import EventoCanonico
 from core.tipos import CategoriaEvento, PrioridadeEvento, OrigemEvento, TipoAcao
 from core.kernel import kernel
 from servicos.catalogo_semantico import catalogo
+from servicos.memoria_perfil import memoria_perfil
 
+
+logger = logging.getLogger(__name__)
+
+def _get_time_slot(timestamp: datetime) -> str:
+    """Determina o período do dia com base no timestamp."""
+    hour = timestamp.hour
+    if 6 <= hour < 12:
+        return "MANHA"
+    if 12 <= hour < 18:
+        return "TARDE"
+    if 18 <= hour < 24:
+        return "NOITE"
+    return "MADRUGADA"
 
 class AgenteReflexo:
     def __init__(self):
-        self.ultimo_alerta: datetime | None = None
-        self.cooldown_segundos = 60
+        self.interacoes_pausadas = False
 
     async def processar(self, evento: EventoCanonico):
-        # O cooldown agora é verificado dentro de cada decisão,
-        # pois um evento pode ser complexo mesmo em cooldown. Só processa ações normais
+        # O AgenteBemEstar agora controla o fluxo de interações.
+        # Este agente apenas obedece.
+        if evento.categoria == CategoriaEvento.SISTEMA_PAUSA_INTERACOES:
+            self.interacoes_pausadas = True
+            return
+        elif evento.categoria == CategoriaEvento.SISTEMA_LIBERA_INTERACOES:
+            self.interacoes_pausadas = False
+            return
+
         atencao = evento.metadados.get("atencao", {})
         if not atencao.get("pode_interagir", True):
             return
@@ -31,52 +53,58 @@ class AgenteReflexo:
         elif evento.categoria == CategoriaEvento.NOTIFICACAO:
             await self._decidir_notificacao(evento)
 
-    def _pode_agir(self) -> bool:
-        if self.ultimo_alerta is None:
-            return True
-        return datetime.utcnow() - self.ultimo_alerta > timedelta(
-            seconds=self.cooldown_segundos
-        )
-
     async def _decidir_musica(self, evento: EventoCanonico):
         artista = evento.payload.get("artista")
-
-        if not artista or not self._pode_agir():
+        if not artista:
             return
 
+        # Obter dados de ambas as memórias para tomar a decisão
         entidade = await catalogo.obter_artista(artista)
+        perfil_artista = await memoria_perfil.obter_perfil_artista(artista) # Perfil genérico
+        horario_atual = _get_time_slot(evento.timestamp)
 
-        score = entidade.atributos.get("stats", {}).get("plays", 0)
+        # Decisão 1: Rotina Musical (prioridade alta)
+        if entidade and not self.interacoes_pausadas:
+            insights = entidade.atributos.get("insights", {})
+            horario_rotina = insights.get("rotina_musical")
+            if horario_rotina and horario_rotina == horario_atual:
+                await kernel.publicar(
+                    evento.clonar(
+                        acao=TipoAcao.INTENCAO_INTERACAO,
+                        payload={
+                            "mensagem": f"Começando o(a) {horario_rotina.title()} com {artista}? Boa escolha!",
+                            "titulo": "Sua Rotina Musical",
+                            "prioridade": PrioridadeEvento.NORMAL,
+                        },
+                    )
+                )
+                return # Ação tomada, não continuar
 
-        if score >= 5:
+        # Decisão 2: Artista favorito (genérico, prioridade mais baixa)
+        if perfil_artista and perfil_artista.confianca > 0.6 and not self.interacoes_pausadas:
             await kernel.publicar(
                 evento.clonar(
                     acao=TipoAcao.INTENCAO_INTERACAO,
                     payload={
-                        "mensagem": f"Você está ouvindo {artista} frequentemente. Bom gosto! 🎵",
-                        "titulo": "Assistente",
+                        "mensagem": f"Vejo que você curte bastante {artista}. Ótima escolha! 🎵",
+                        "titulo": "Assistente Musical",
                         "prioridade": PrioridadeEvento.NORMAL,
                     },
                 )
             )
 
-            self.ultimo_alerta = datetime.utcnow()
-
     async def _decidir_app(self, evento: EventoCanonico):
         pacote = evento.payload.get("pacote") or getattr(evento, "pacote", None)
-        if not self._pode_agir() or not pacote:
+        if not pacote:
             return
 
+        # Obter dados de ambas as memórias para tomar a decisão
         entidade = await catalogo.obter_app(pacote)
+        perfil_app = await memoria_perfil.obter_perfil_app(pacote)
 
-        # 🛡️ Validação defensiva: se o fato é inédito e não está no banco/cache ainda
-        if not entidade or not hasattr(entidade, "atributos"):
-            return
-
-        stats = entidade.atributos.get("stats", {})
-        insights = entidade.atributos.get("insights", {})
-
-        if stats.get("tempo_foco", 0) > 20:
+        # Decisão 1: Bem-estar (prioridade alta), pode usar dados do catálogo semântico
+        stats = getattr(entidade, "atributos", {}).get("stats", {})
+        if stats.get("tempo_foco", 0) > 20 and not self.interacoes_pausadas:
             await kernel.publicar(
                 evento.clonar(
                     acao=TipoAcao.INTENCAO_INTERACAO,
@@ -87,56 +115,41 @@ class AgenteReflexo:
                     },
                 )
             )
-            self.ultimo_alerta = datetime.utcnow()
-        elif insights.get("app_favorito"):
+        # Decisão 2: App favorito (prioridade baixa), usando o novo perfil de usuário
+        elif perfil_app and perfil_app.confianca > 0.8 and not self.interacoes_pausadas:
             await kernel.publicar(
                 evento.clonar(
                     acao=TipoAcao.INTENCAO_INTERACAO,
                     payload={
-                        "mensagem": f"Seu app favorito {pacote} em uso novamente!",
-                        "titulo": "Assistente",
+                        "mensagem": f"Notei que {pacote} é um dos seus apps mais usados.",
+                        "titulo": "Assistente de Hábitos",
                         "prioridade": PrioridadeEvento.BAIXA,
                     },
                 )
             )
-            self.ultimo_alerta = datetime.utcnow()
 
     async def _decidir_notificacao(self, evento: EventoCanonico):
         remetente = evento.payload.get("titulo")
         texto = evento.payload.get("texto")
-        if not remetente:
-            return
-            
-        entidade = await catalogo.obter_contato(remetente)
-        
-        # 🛡️ BLINDAGEM ARQUITETURAL: Verifica se o contato é inédito ou falhou ao carregar
-        if not entidade or not hasattr(entidade, "atributos"):
-            # O contato não existe no banco (é novo).
-            # Como o Reflexo não pensa, ele apenas delega para o Córtex se houver um texto.
-            if texto:
-                await kernel.publicar(
-                    evento.clonar(acao=TipoAcao.EVENTO_COMPLEXO)
-                )
-            return # Aborta o processamento de reflexo rápido, pois não há estatísticas.
 
-        stats = entidade.atributos.get("stats", {})
-        if self._pode_agir() and stats.get("interacoes", 0) >= 5:
+        if not remetente:
+            logger.debug(f"[Reflexo] Ignorando notificação sem remetente: {evento.id[:8]}")
+            return
+
+        if texto:
+            # A filosofia do sistema é clara: se um evento é complexo, ele deve
+            # ser analisado pelo "córtex" (LLM). Uma notificação com texto é, por
+            # definição, complexa.
+            # Este agente, como um "reflexo", não deve tentar interpretá-la.
+            # Sua única responsabilidade é delegar para a próxima camada.
+            # Qualquer outra lógica que crie uma INTENCAO_INTERACAO aqui para
+            # notificações com texto viola a arquitetura e causa as mensagens
+            # "divididas" que você observa.
+            logger.info(f"🚦 [Reflexo] Notificação de '{remetente}' tem texto. Delegando para raciocínio (LLM). Evento: {evento.id[:8]}")
             await kernel.publicar(
-                evento.clonar(
-                    acao=TipoAcao.INTENCAO_INTERACAO,
-                    payload={
-                        "mensagem": f"Você fala bastante com {remetente}",
-                        "titulo": "Assistente",
-                        "prioridade": PrioridadeEvento.BAIXA,
-                    },
-                )
-            )
-            self.ultimo_alerta = datetime.utcnow()
-        # Se a notificação tem texto mas não bateu em nenhuma regra simples,
-        # ela é candidata a ser complexa.
-        elif texto:
-            await kernel.publicar(
-                # Apenas muda a ação. O payload original é preservado pelo `clonar`.
-                # O motivo pode ir para os metadados se necessário, mas não no payload.
                 evento.clonar(acao=TipoAcao.EVENTO_COMPLEXO)
             )
+        else:
+            # Se não há texto, não há o que a LLM interpretar. O agente de reflexo
+            # termina sua análise aqui. Não há ação a ser tomada.
+            logger.debug(f"✅ [Reflexo] Notificação de '{remetente}' sem texto. Nenhuma ação de reflexo. Evento: {evento.id[:8]}")
