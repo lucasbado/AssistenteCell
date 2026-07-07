@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import time
 import hashlib
+import json
 import logging
 from pydantic import BaseModel, Field
 
@@ -217,15 +218,32 @@ class PipelineAtencao:
         self,
         evento: EventoCanonico,
     ) -> str:
+        """
+        Gera uma assinatura única e estável para um evento, focando no conteúdo
+        relevante para evitar duplicatas causadas por metadados voláteis.
+        """
+        categoria = evento.categoria
+        pacote = evento.pacote
+        payload = evento.payload
 
-        texto = (
-            f"{evento.categoria}|"
-            f"{evento.pacote}|"
-            f"{evento.payload}"
-        )
+        # Cria uma assinatura baseada no conteúdo significativo, ignorando campos voláteis.
+        if categoria == CategoriaEvento.NOTIFICACAO:
+            # Para notificações, o conteúdo principal é quem enviou e o que disse.
+            titulo = payload.get("titulo", "")
+            texto_notif = payload.get("texto", "")
+            texto_assinatura = f"{categoria.value}|{pacote}|{titulo}|{texto_notif}"
+        elif categoria == CategoriaEvento.MEDIA:
+            # Para mídia, é sobre o artista e a música.
+            artista = payload.get("artista", "")
+            musica = payload.get("musica", "")
+            texto_assinatura = f"{categoria.value}|{pacote}|{artista}|{musica}"
+        else:
+            # Para outros eventos, usamos um hash do payload ordenado, que é mais robusto.
+            payload_str = json.dumps(payload, sort_keys=True)
+            texto_assinatura = f"{categoria.value}|{pacote}|{payload_str}"
 
         return hashlib.sha1(
-            texto.encode()
+            texto_assinatura.encode()
         ).hexdigest()
 
 

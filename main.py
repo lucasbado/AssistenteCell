@@ -22,10 +22,12 @@ from agentes.agente_musica import AgenteMusica
 from agentes.agente_pesquisa import AgentePesquisa
 from agentes.agente_foco import AgenteFoco
 from agentes.agente_sumarizador_perfil import AgenteSumarizadorPerfil
+from agentes.agente_aprendizagem import AgenteAprendizagem
 from api.eventos import router as eventos_router
 from api.websocket import router as ws_router
 from api.testes import router as testes_router
 from api.perfil import router as perfil_router
+from api.feedback import router as feedback_router
 from banco.database import inicializar_banco
 from servicos.memoria_episodica import MemoriaEpisodica
 
@@ -79,6 +81,7 @@ app.include_router(eventos_router)
 app.include_router(ws_router)
 app.include_router(testes_router)
 app.include_router(perfil_router)
+app.include_router(feedback_router)
 
 # ==========================================
 # 5. INSTANCIAÇÃO E REGISTRO DOS AGENTES
@@ -97,6 +100,7 @@ agente_musica = AgenteMusica()
 agente_pesquisa = AgentePesquisa()
 agente_foco = AgenteFoco()
 agente_sumarizador_perfil = AgenteSumarizadorPerfil()
+agente_aprendizagem = AgenteAprendizagem()
 
 # Registre os agentes no Kernel
 
@@ -179,6 +183,12 @@ kernel.registrar(
 kernel.registrar(
     filtro=lambda e: e.acao == TipoAcao.GERAR_RESUMO_PERFIL,
     callback=agente_sumarizador_perfil.processar
+)
+
+# Pipeline de Aprendizado (Feedback do usuário)
+kernel.registrar(
+    filtro=lambda e: e.acao == TipoAcao.FEEDBACK_USUARIO,
+    callback=agente_aprendizagem.processar
 )
 
 # Disponibiliza agentes para o ciclo de vida da app, se necessário

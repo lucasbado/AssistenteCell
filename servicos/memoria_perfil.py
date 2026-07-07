@@ -71,6 +71,31 @@ class MemoriaPerfil:
         categoria = f"{CATEGORIA_ARTISTA}_{time_slot}"
         await self._registrar_interacao(categoria, artista)
 
+    async def registrar_feedback_negativo(self, categoria_base: str, valor: str):
+        """Aplica um feedback negativo, diminuindo o score e a confiança com uma penalidade forte."""
+        # Para artistas, o feedback negativo deve afetar todos os perfis de horário.
+        if categoria_base == CATEGORIA_ARTISTA:
+            perfis = await self.obter_perfis_artista(valor)
+            for perfil in perfis:
+                # Penalidade forte para desincentivar rapidamente.
+                await self._registrar_interacao(perfil.categoria, valor, score_increment=-5)
+        else:
+            await self._registrar_interacao(categoria_base, valor, score_increment=-5)
+
+    async def registrar_feedback_positivo(self, categoria_base: str, valor: str):
+        """Aplica um feedback positivo, aumentando o score e a confiança com um bônus."""
+        # Para artistas, reforça todos os perfis de horário.
+        if categoria_base == CATEGORIA_ARTISTA:
+            perfis = await self.obter_perfis_artista(valor)
+            if perfis:
+                for perfil in perfis:
+                    await self._registrar_interacao(perfil.categoria, valor, score_increment=2)
+            else:
+                # Se não há perfil, cria um para o horário atual como ponto de partida.
+                await self.registrar_escuta_artista(valor, datetime.now(timezone.utc))
+        else:
+            await self._registrar_interacao(categoria_base, valor, score_increment=2)
+
     async def _obter_perfil(self, categoria: str, valor: str) -> PerfilUsuarioDB | None:
         """Método genérico para obter dados de perfil."""
         async with AsyncSessionLocal() as session:

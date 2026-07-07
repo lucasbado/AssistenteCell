@@ -27,9 +27,13 @@ class GerenciadorNotificacoes:
             logger.warning("⚠️ Tentativa de enviar alerta, mas o telemóvel está desconectado!")
             return
         
+        # O 'payload' recebido é o evento completo serializado.
+        # Extraímos o payload de negócio dele.
+        payload_negocio = payload.get("payload", {})
+
         # LÓGICA DE ADAPTAÇÃO (ROBUSTA):
         # 1. Copia o payload interno para não modificar o evento original e preservar todos os campos.
-        dados_para_envio = payload.copy()
+        dados_para_envio = payload_negocio.copy()
 
         # 2. Adapta o nome da chave 'mensagem' para 'texto' para manter
         #    compatibilidade com o contrato do cliente Android.
@@ -40,6 +44,9 @@ class GerenciadorNotificacoes:
         # 3. Garante valores padrão e a assinatura do sistema.
         dados_para_envio.setdefault("titulo", "Ollie")
         dados_para_envio["origem_sistema"] = "OLLIE"
+
+        # 4. INCLUI O GANCHO PARA FEEDBACK: O ID de correlação é a chave para o aprendizado.
+        dados_para_envio['correlacao_id'] = payload.get('correlacao_id')
 
         logger.info(f"🚀 Enviando alerta via WS: {json.dumps(dados_para_envio, ensure_ascii=False)}")
         for conexao in self.conexoes_ativas:
