@@ -29,13 +29,14 @@ class AgenteReflexo:
         # A filosofia do sistema é clara: se um evento é complexo, ele deve
         # ser analisado pelo "córtex" (LLM). Uma notificação com texto é, por
         # definição, complexa. Este agente, como um "reflexo", não deve tentar
-        # interpretá-la. Sua única responsabilidade é delegar para a próxima camada.
+        # interpretá-la. Essa responsabilidade foi delegada ao AgenteMemoriaTrabalho,
+        # que agrupa as mensagens para dar contexto à IA antes de escalar.
         if texto:
-            logger.info(f"🚦 [Reflexo] Notificação de '{remetente}' tem texto. Delegando para raciocínio (LLM). Evento: {evento.id[:8]}")
-            await kernel.publicar(
-                evento.clonar(acao=TipoAcao.EVENTO_COMPLEXO)
-            )
+            # Ação para notificações com texto agora é do AgenteMemoriaTrabalho.
+            # Simplesmente retornamos para que o AgenteReflexo não faça nada,
+            # pois o AgenteMemoriaTrabalho já está cuidando deste evento em paralelo.
+            return 
         else:
             # Se não há texto, não há o que a LLM interpretar. O agente de reflexo
             # termina sua análise aqui. Não há ação a ser tomada.
-            logger.debug(f"✅ [Reflexo] Notificação de '{remetente}' sem texto. Nenhuma ação de reflexo. Evento: {evento.id[:8]}")
+            logger.debug(f"✅ [Reflexo] Notificação de '{remetente}' sem texto. Nenhuma ação necessária. Evento: {evento.id[:8]}")

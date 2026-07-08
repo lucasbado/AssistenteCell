@@ -78,7 +78,8 @@ class MemoriaEpisodica:
             # Retorna uma lista limpa para ser consumida pela LLM
             return [
                 {
-                    "tempo": e.timestamp.strftime("%H:%M:%S"),
+                    "id": e.id,
+                    "timestamp": e.timestamp,
                     "origem": e.origem,
                     "tipo": e.tipo,
                     "dados": e.payload,

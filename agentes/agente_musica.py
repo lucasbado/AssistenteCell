@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 
 from core.evento import EventoCanonico
-from core.tipos import PrioridadeEvento, TipoAcao
+from core.tipos import PrioridadeEvento, TipoAcao, CategoriaEvento
 from core.kernel import kernel
 from servicos.catalogo_semantico import catalogo
 from servicos.memoria_perfil import memoria_perfil
@@ -44,10 +44,11 @@ class AgenteMusica:
             if horario_rotina and horario_rotina == horario_atual:
                 await kernel.publicar(
                     evento.clonar(
+                        categoria=CategoriaEvento.INTENCAO_NOTIFICACAO,
                         acao=TipoAcao.INTENCAO_INTERACAO,
                         prioridade=PrioridadeEvento.NORMAL,
                         payload={
-                            "mensagem": f"Começando o(a) {horario_rotina.title()} com {artista}? Boa escolha!",
+                            "texto": f"Começando o(a) {horario_rotina.title()} com {artista}? Boa escolha!",
                             "titulo": "Sua Rotina Musical",
                         },
                     )
@@ -58,10 +59,11 @@ class AgenteMusica:
         if perfil_artista and perfil_artista.confianca > 0.6:
             await kernel.publicar(
                 evento.clonar(
+                    categoria=CategoriaEvento.INTENCAO_NOTIFICACAO,
                     acao=TipoAcao.INTENCAO_INTERACAO,
                     prioridade=PrioridadeEvento.NORMAL,
                     payload={
-                        "mensagem": f"Vejo que você curte bastante {artista}. Ótima escolha! 🎵",
+                        "texto": f"Vejo que você curte bastante {artista}. Ótima escolha! 🎵",
                         "titulo": "Assistente Musical",
                     },
                 )

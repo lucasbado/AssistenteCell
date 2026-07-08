@@ -2,6 +2,7 @@ from enum import Enum
 
 class CategoriaEvento(str, Enum):
     MEDIA = "MEDIA"
+    SENSOR_SYSTEM_CONTEXT = "SENSOR_SYSTEM_CONTEXT"
     APP_FOREGROUND = "APP_FOREGROUND"
     NOTIFICACAO = "NOTIFICACAO"
     # Categorias para controle interno do sistema
@@ -9,6 +10,8 @@ class CategoriaEvento(str, Enum):
     SISTEMA_LIBERA_INTERACOES = "SISTEMA_LIBERA_INTERACOES"
     SISTEMA_COMANDO_USUARIO = "SISTEMA_COMANDO_USUARIO"
     MEDIA_COMANDO = "MEDIA_COMANDO"
+    INTENCAO_NOTIFICACAO = "INTENCAO_NOTIFICACAO" # Nova categoria
+    NOTIFICACAO_PRONTA_PARA_ENVIO = "NOTIFICACAO_PRONTA_PARA_ENVIO"
 
 class TipoAcao(str, Enum):
     NORMAL = "NORMAL"

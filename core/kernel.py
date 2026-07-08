@@ -44,6 +44,12 @@ class KernelCognitivo:
 
         self._contador = 0
 
+    def limpar_listeners(self):
+        """Limpa todos os listeners registrados para evitar duplicatas durante o hot-reload."""
+        if self._listeners:
+            logger.info(f"[Kernel] Limpando {len(self._listeners)} listeners antigos.")
+            self._listeners.clear()
+
     # ----------------------------------------------------
     # Registro de especialistas
     # ----------------------------------------------------

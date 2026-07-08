@@ -11,8 +11,9 @@ from core.kernel import kernel
 from core.evento import EventoCanonico
 from core.tipos import CategoriaEvento, OrigemEvento, TipoAcao, PrioridadeEvento
 from servicos.memoria_perfil import memoria_perfil
+from servicos.perfil_servico import servico_perfil
 
-router = APIRouter(prefix="/perfil", tags=["Perfil"])
+router = APIRouter(tags=["Perfil"])
 
 # --- Modelos de Resposta para o endpoint analítico ---
 
@@ -29,8 +30,18 @@ class PerfilAnaliticoResponse(BaseModel):
     contatos_mais_frequentes: List[ItemPerfil]
     rotinas_musicais: List[RotinaMusical]
 
+@router.get("/perfil", summary="Retorna o perfil cognitivo do usuário", description="Agrega todas as informações aprendidas sobre os hábitos e preferências do usuário em uma única visão consolidada e narrativa.")
+async def get_perfil_cognitivo():
+    """
+    Endpoint que constrói e retorna o perfil cognitivo do usuário.
+    Este é o endpoint principal para a tela de perfil.
+    """
+    # O servico_perfil é responsável por orquestrar a geração do DTO
+    # a partir de várias fontes de memória.
+    return await servico_perfil.gerar_perfil_cognitivo()
 
-@router.post("/resumo", status_code=status.HTTP_202_ACCEPTED)
+
+@router.post("/perfil/resumo", status_code=status.HTTP_202_ACCEPTED)
 async def solicitar_resumo_perfil():
     """
     Dispara um evento para que o sistema gere um resumo do perfil do usuário
@@ -46,7 +57,7 @@ async def solicitar_resumo_perfil():
     await kernel.publicar(evento_comando)
     return {"status": "solicitacao_de_resumo_enfileirada", "id": evento_comando.id}
 
-@router.get("/analitico", response_model=PerfilAnaliticoResponse)
+@router.get("/perfil/analitico", response_model=PerfilAnaliticoResponse)
 async def obter_perfil_analitico():
     """
     Retorna uma visão analítica e estruturada do perfil do usuário,

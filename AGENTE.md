@@ -50,3 +50,29 @@ docs/kernel.md
 docs/event_model.md
 docs/agents.md
 docs/memory.md
+docs/cognitive_query_layer.md
+
+---
+
+## Camada de Consulta Cognitiva (API Externa)
+
+Enquanto os agentes e o kernel formam o "cérebro" que processa eventos, a Camada de Consulta Cognitiva é a "boca" que comunica o conhecimento adquirido.
+
+### Objetivo
+
+Servir como a única interface entre o backend e o aplicativo cliente (Android). Ela abstrai completamente a complexidade interna do sistema.
+
+### Princípios
+
+- **Abstração Total:** O cliente NUNCA deve saber sobre agentes, memórias ou tabelas de banco de dados.
+- **Endpoints de Alto Nível:** Expor endpoints baseados em conceitos, não em dados (`/dashboard`, `/perfil`), em vez de CRUDs (`/get_events`).
+- **Transformação de Dados em Narrativa:** A camada é responsável por transformar dados brutos e estatísticas em texto coeso e pronto para exibição. O cliente apenas renderiza.
+- **Contratos (DTOs):** A comunicação é feita através de Data Transfer Objects (DTOs) bem definidos, garantindo estabilidade para o cliente mesmo que o backend seja refatorado.
+
+### Arquitetura da Camada
+
+1.  **Endpoints (Routers):** A porta de entrada HTTP.
+2.  **Serviços de Consulta:** Orquestram a lógica para construir a resposta de um endpoint.
+3.  **Agregadores:** Reúnem e pré-processam dados de diversas fontes internas (memórias, DBs).
+
+Essa separação garante que o sistema possa evoluir em duas frentes independentes: o processamento de eventos em tempo real e a exposição de conhecimento acumulado.

@@ -1,13 +1,13 @@
 """
 api/eventos.py
 """
-
 import logging
 import json
+from collections import OrderedDict
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, status, Request, HTTPException
-from pydantic import BaseModel, Field, ValidationError, model_validator
-from typing import Any, Optional
-from api.websocket import central_alertas
+from pydantic import BaseModel, ValidationError, model_validator
+from typing import Any
 
 from core.evento import EventoCanonico
 from core.tipos import CategoriaEvento, OrigemEvento
@@ -17,61 +17,102 @@ from core.kernel import kernel
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# ==========================================
+# CACHE DE DESDUPLICAÇÃO (ANTI-SPAM DO ANDROID)
+# ==========================================
+DEDUPLICATION_CACHE = OrderedDict()
+CACHE_TTL_SECONDS = 10  # Ignora eventos idênticos em uma janela de 10 segundos
+
 class RequestEvento(BaseModel):
     categoria: str
-    pacote: str
+    pacote: str | None = None
     conteudo: dict[str, Any]
 
     @model_validator(mode="before")
     @classmethod
     def _unificar_payload(cls, data: Any) -> Any:
-        """Garante compatibilidade com o cliente que envia 'atributos' em vez de 'conteudo'."""
+        """Garante compatibilidade com vários formatos de payload do cliente."""
         if isinstance(data, dict):
-            # Se 'atributos' existe e 'conteudo' não, movemos o valor.
+            # Compatibilidade com 'tipo' -> 'categoria'
+            if "tipo" in data and "categoria" not in data:
+                data["categoria"] = data.pop("tipo")
+            
+            # Compatibilidade com 'atributos' ou 'payload' -> 'conteudo'
             if "atributos" in data and "conteudo" not in data:
                 data["conteudo"] = data.pop("atributos")
+            elif "payload" in data and "conteudo" not in data:
+                data["conteudo"] = data.pop("payload")
+
+            # Garante um pacote padrão se não for fornecido (ex: para sensores de sistema)
+            if "pacote" not in data:
+                data["pacote"] = "br.com.ollie.sensor.sistema"
         return data
 
+def _is_duplicate(evento: RequestEvento) -> bool:
+    """Verifica se um evento muito parecido foi recebido recentemente."""
+    now = datetime.now(timezone.utc)
+
+    # 1. Cria uma chave estável para o evento
+    conteudo_str = json.dumps(evento.conteudo, sort_keys=True)
+    event_key = (evento.categoria, evento.pacote, conteudo_str)
+
+    # 2. Limpa o cache antigo
+    keys_to_delete = []
+    for key, timestamp in DEDUPLICATION_CACHE.items():
+        if now - timestamp > timedelta(seconds=CACHE_TTL_SECONDS):
+            keys_to_delete.append(key)
+        else:
+            break
+    for key in keys_to_delete:
+        del DEDUPLICATION_CACHE[key]
+
+    # 3. Verifica se é duplicado
+    if event_key in DEDUPLICATION_CACHE:
+        DEDUPLICATION_CACHE.move_to_end(event_key) # Atualiza o tempo
+        return True
+
+    # 4. Se não é duplicado, adiciona ao cache
+    DEDUPLICATION_CACHE[event_key] = now
+    return False
+
+# ==========================================
+# ENDPOINT PRINCIPAL DO SENSOR
+# ==========================================
 @router.post("/eventos", status_code=status.HTTP_202_ACCEPTED)
 async def receber_evento(request: Request):
-    # --- DEBUGGING: Log do corpo bruto da requisição ---
     try:
         body = await request.json()
-        logger.info(
-            f"Recebido payload em /eventos: {json.dumps(body, indent=2, ensure_ascii=False)}"
-        )
         evento = RequestEvento.model_validate(body)
     except json.JSONDecodeError:
-        logger.error(
-            "Erro de decodificação de JSON: o corpo da requisição não é um JSON válido."
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Corpo da requisição não é um JSON válido.",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="JSON inválido.")
     except ValidationError as e:
-        logger.error(f"Erro de validação Pydantic em /eventos. Detalhes: {e.errors()}")
-        # Re-lança a exceção para que o FastAPI possa gerar a resposta 422 detalhada.
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.errors()
-        )
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.errors())
+
+    # 0. Verificação Anti-Spam (Grito de rastreio)
+    if _is_duplicate(evento):
+        print(f"🛑 [GATEWAY] Evento {evento.categoria} do {evento.pacote} IGNORADO (DUPLICADO).")
+        return {"status": "ignorado_como_duplicado"}
 
     # 1. Cria o evento oficial do Kernel
     evento_canonico = EventoCanonico(
         categoria=CategoriaEvento(evento.categoria.upper()),
         origem=OrigemEvento.ANDROID,
-        pacote=evento.pacote,
-        payload=evento.conteudo,  # <--- A CORREÇÃO É AQUI! Pegamos o 'conteudo' do Android e chamamos de 'payload' internamente
+        pacote=evento.pacote or "br.com.ollie.sensor.sistema",
+        payload=evento.conteudo
     )
 
     # 2. O Pipeline de Atenção avalia e enriquece o evento
     resultado_atencao = pipeline_atencao.avaliar(evento_canonico)
     if not resultado_atencao:
+        print(f"🛑 [GATEWAY] Evento {evento.categoria} do {evento.pacote} BARRADO PELA ATENÇÃO.")
         return {"status": "ignorado_pelo_pipeline_de_atencao"}
-
+    
     evento_canonico.metadados["atencao"] = resultado_atencao.model_dump()
 
-    # 3. Entrega ao Kernel Cognitivo
+    # RASTREADOR: O EVENTO PASSOU!
+    print(f"✅ [GATEWAY] Evento {evento.categoria} APROVADO! Enviando para o Kernel...")
+
+    # 3. Entrega ao Kernel Cognitivo (Event Bus)
     await kernel.publicar(evento_canonico)
 
     return {"status": "enfileirado", "id": evento_canonico.id}

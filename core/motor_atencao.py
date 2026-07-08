@@ -79,9 +79,24 @@ class PipelineAtencao:
 
         }
 
+        # Títulos usados pelo próprio assistente. Notificações com esses títulos
+        # são ignoradas para evitar loops de feedback.
+        self._titulos_assistente = {
+            "assistente",
+            "ollie",
+            "sugestão musical",
+            "bem-estar",
+            "assistente de hábitos",
+            "sua rotina musical",
+            "assistente musical",
+            "o que aprendi sobre você",
+            "teste de alerta ollie", # Título do botão de teste no app
+            "agente ollie ativo", # Título da notificação persistente do serviço
+        }
+
         # janelas
 
-        self.janela_deduplicacao = 45
+        self.janela_deduplicacao = 5 # Reduzido para permitir rajadas de mensagens legítimas
 
         self.janela_midia = 15
 
@@ -98,6 +113,11 @@ class PipelineAtencao:
 
         if self._blacklist_evento(evento):
             logger.debug(f"🚮 Evento {evento.id[:8]} descartado por blacklist.")
+            return None
+
+        # Adicionado para evitar loops de feedback
+        if self._evento_autogerado(evento):
+            logger.debug(f"🤫 Evento {evento.id[:8]} descartado por ser autogerado (loop).")
             return None
 
         if self._evento_duplicado(evento):
@@ -129,6 +149,21 @@ class PipelineAtencao:
         pacote = evento.pacote.lower()
 
         return pacote in self._blacklist
+
+    def _evento_autogerado(self, evento: EventoCanonico) -> bool:
+        """
+        Verifica se o evento é uma notificação gerada pelo próprio sistema.
+        Isso é crucial para evitar loops de feedback onde o assistente lê
+        suas próprias notificações.
+        """
+        if evento.categoria != CategoriaEvento.NOTIFICACAO:
+            return False
+
+        # Se o título da notificação corresponder a um dos títulos que o próprio
+        # assistente usa, o evento é ignorado.
+        titulo = evento.payload.get("titulo", "").lower()
+        return titulo in self._titulos_assistente
+
 
     # ==========================================================
     # DEDUPLICAÇÃO

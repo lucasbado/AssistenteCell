@@ -8,7 +8,7 @@ import logging
 from collections import defaultdict
 
 from core.evento import EventoCanonico
-from core.tipos import TipoAcao, OrigemEvento
+from core.tipos import TipoAcao, OrigemEvento, CategoriaEvento
 from core.kernel import kernel
 from servicos.memoria_perfil import memoria_perfil
 from servicos.llm import ServicoLLM
@@ -66,11 +66,12 @@ class AgenteSumarizadorPerfil:
         """Envia o resumo para o usuário através de uma notificação."""
         await kernel.publicar(
             evento_original.clonar(
+                categoria=CategoriaEvento.INTENCAO_NOTIFICACAO,
                 acao=TipoAcao.INTENCAO_INTERACAO,
                 origem=OrigemEvento.IA,
                 payload={
                     "titulo": "O que aprendi sobre você",
-                    "mensagem": resumo,
+                    "texto": resumo,
                 }
             )
         )

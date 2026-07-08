@@ -10,10 +10,19 @@ from banco.models import MemoriaTrabalhoDB
 DECAY_RATE_PER_HOUR = 1.0 / 24.0
 
 class MemoriaDeTrabalho:
+    async def obter_contexto(self, chave_conversa: str) -> list[str] | None:
+        """Recupera o contexto de uma conversa da memória de trabalho."""
+        async with AsyncSessionLocal() as session:
+            stmt = select(MemoriaTrabalhoDB).where(MemoriaTrabalhoDB.chave_conversa == chave_conversa)
+            resultado = await session.execute(stmt)
+            conversa = resultado.scalars().first()
+            if conversa:
+                return conversa.resumo_contexto
+            return None
 
-    async def atualizar_conversa(self, chave_conversa: str, nova_mensagem: str, incremento_relevancia: float = 1.0):
+    async def atualizar_conversa(self, chave_conversa: str, novas_mensagens: list[str], incremento_relevancia: float = 1.0):
         """
-        Atualiza uma conversa na memória de trabalho, adicionando uma nova mensagem
+        Atualiza uma conversa na memória de trabalho, adicionando novas mensagens
         e aumentando sua relevância.
         """
         async with AsyncSessionLocal() as session:
@@ -26,7 +35,7 @@ class MemoriaDeTrabalho:
             if conversa:
                 # Conversa existente: atualiza
                 contexto_atual = conversa.resumo_contexto if isinstance(conversa.resumo_contexto, list) else []
-                contexto_atual.append(nova_mensagem)
+                contexto_atual.extend(novas_mensagens)
                 # Mantém apenas as últimas 10 mensagens para não sobrecarregar
                 conversa.resumo_contexto = contexto_atual[-10:]
                 
@@ -36,7 +45,7 @@ class MemoriaDeTrabalho:
                 # Nova conversa: cria
                 conversa = MemoriaTrabalhoDB(
                     chave_conversa=chave_conversa,
-                    resumo_contexto=[nova_mensagem],
+                    resumo_contexto=novas_mensagens[-10:], # Salva apenas as últimas
                     relevancia=incremento_relevancia,
                     ultima_interacao=now
                 )

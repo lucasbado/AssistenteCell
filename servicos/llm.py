@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import json
 import logging
-import requests
 
+import httpx
 from modelos.catalogo import EntidadeSemantica
 
 logger = logging.getLogger(__name__)
@@ -31,18 +31,19 @@ class ServicoLLM:
         self.url = "http://localhost:11434/api/generate"
 
         self.modelo = "qwen2.5:7b"
-
         self.timeout = 30
+        # Use um cliente assíncrono para não bloquear o event loop.
+        self.client = httpx.AsyncClient(timeout=self.timeout)
 
     # =====================================================
     # API PRIVADA
     # =====================================================
 
-    def _gerar_json(
+    async def _gerar_json(
         self,
         prompt: str,
         system: str,
-    ) -> dict:
+    ) -> dict: 
 
         payload = {
 
@@ -65,16 +66,7 @@ class ServicoLLM:
             },
         }
 
-        resposta = requests.post(
-
-            self.url,
-
-            json=payload,
-
-            timeout=self.timeout,
-
-        )
-
+        resposta = await self.client.post(self.url, json=payload)
         resposta.raise_for_status()
 
         texto = resposta.json()["response"]
@@ -115,7 +107,7 @@ Esquema:
 
         prompt = f"Artista: {nome}"
 
-        dados = self._gerar_json(prompt, system)
+        dados = await self._gerar_json(prompt, system)
 
         return EntidadeSemantica.model_validate(dados)
 
@@ -148,7 +140,7 @@ Responda apenas JSON.
 
         prompt = f"Pacote Android: {pacote}"
 
-        dados = self._gerar_json(prompt, system)
+        dados = await self._gerar_json(prompt, system)
 
         # Garante que a chave seja o pacote, caso a LLM não o faça.
         dados['chave'] = pacote
@@ -164,71 +156,75 @@ Responda apenas JSON.
         """
         Classifica um evento e retorna um JSON com:
         - categoria_inferida: str
-        - mensagem_dinamica: str | None
+        - mensagem_dinamica: str
         - acao_necessaria: bool
         - contexto_extra: dict (opcional)
         """
-        system = """Você é o módulo de Cognição da assistente Ollie.
+        system = """Você é o módulo de Cognição da assistente Ollie. Sua função é interpretar eventos e gerar uma resposta ESTRUTURADA em JSON.
 
-Você recebe apenas eventos que os módulos de Atenção e Reflexo NÃO conseguiram resolver.
+Você recebe eventos que as camadas de Atenção e Reflexo não resolveram. O evento tem `categoria`, `pacote` e `payload`.
 
-Sua função NÃO é decidir políticas do sistema.
-Sua função é apenas interpretar linguagem humana e gerar uma resposta estruturada.
+### Regras de Prioridade
+- **ALTA**: Mensagens diretas de uma pessoa (ex: WhatsApp, SMS de um contato). Notificações urgentes (ex: calendário, lembretes).
+- **NORMAL**: Mensagens de grupo. E-mails importantes. Notificações de apps de produtividade.
+- **BAIXA**: Notificações de redes sociais (likes, novos posts), promoções, notícias não urgentes.
 
-O evento recebido possui:
+### Regra de Interação (O mais importante!)
+Sua principal decisão é o "tipo_interacao".
+- **NOTIFICAR**: Use quando for a primeira vez que você vê um assunto, ou se uma informação MUITO importante e nova chegou. Esta ação gera uma notificação para o usuário.
+- **ATUALIZACAO_SILENCIOSA**: Use se as novas mensagens são apenas uma continuação de um tópico que você já resumiu nos últimos minutos (presente no "contexto_historico"). O sistema irá absorver a informação sem notificar o usuário, aguardando mais contexto. O objetivo é evitar notificar o usuário a cada 2 minutos sobre a mesma história em andamento.
 
-- categoria: tipo do evento
-- pacote: aplicativo de origem
-- payload: dados estruturados do evento
+Se o `pre_resumo` contém "Você tem 12 mensagens...", é um forte indicador para usar "NOTIFICAR".
+Se o `pre_resumo` contém "Você tem 2 mensagens..." e o `contexto_historico` mostra que você já notificou sobre isso há pouco tempo, prefira "ATUALIZACAO_SILENCIOSA".
 
-Analise apenas o payload recebido.
+### Regras de Geração da "mensagem_dinamica"
+Sua tarefa principal é criar a "mensagem_dinamica". Siga esta hierarquia ESTRITA:
 
-### Regras
+1.  **SE o payload contiver "pre_resumo"**:
+    - Este campo é a verdade absoluta, gerado por uma heurística.
+    - Sua "mensagem_dinamica" DEVE ser uma versão mais natural e humana DESTE resumo.
+    - **NÃO descarte a informação do "pre_resumo".** Por exemplo, se o resumo for "Você tem 2 mensagens de Grupo X e 1 chamada perdida de Maria", sua resposta PODE ser "Olá! Você tem algumas novidades: 2 mensagens do grupo X e uma chamada perdida de Maria.", mas NUNCA "Maria te ligou.".
+    - Esta é sua principal fonte de informação. Use-a.
 
-NOTIFICACAO
-- O campo "titulo" normalmente representa o remetente.
-- O campo "texto" representa o conteúdo.
-- Preserve as informações importantes.
-- Nunca invente nomes.
-- Nunca invente mensagens.
-- Não resuma demais quando a mensagem for curta.
-- Se houver emojis, pode ignorá-los.
+2.  **SENÃO, SE o payload contiver "conversa_completa" ou "mensagens"**:
+    - Analise o histórico e as novas mensagens para criar um resumo conciso.
 
-MEDIA
-- Utilize artista, música, álbum ou vídeo quando disponíveis.
+3.  **SENÃO (como último recurso)**:
+    - Use "titulo" como remetente e "texto" como a mensagem única para uma notificação simples.
 
-APP_FOREGROUND
-- Interprete o aplicativo aberto e o possível contexto.
-
-Se não houver informação suficiente para criar uma mensagem útil,
-retorne: "acao_necessaria": false
-
-Se você precisar de informações externas (da internet) para responder,
-retorne: "contexto_extra": {"precisa_pesquisar": true, "query": "sua pergunta aqui"}
-e "acao_necessaria": false.
-
-Nunca invente dados.
+### Regras Adicionais
+- Se o payload contiver "contexto_historico", use-o para entender a conversa que aconteceu ANTES das novas mensagens.
+- Preserve informações importantes. Não invente nomes ou mensagens.
+- Se não houver informação suficiente, retorne "tipo_interacao": "IGNORAR".
+- Se precisar de informações da internet, retorne "tipo_interacao": "IGNORAR" e "contexto_extra": {"precisa_pesquisar": true, "query": "sua pergunta aqui"}.
 
 Retorne SOMENTE JSON válido.
-
 Formato:
 {
-    "categoria_inferida": "...",
-    "confianca": 0.0,
-    "acao_necessaria": true,
-    "mensagem_dinamica": "...",
-    "contexto_extra": {}
+    "categoria_inferida": "MENSAGEM_PESSOAL",
+    "confianca": 0.9,
+    "prioridade": "ALTA",
+    "tipo_interacao": "NOTIFICAR",
+    "mensagem_dinamica": "Resumo da situação para o usuário.",
+    "contexto_extra": {},
+    "acao_sugerida": {
+        "tipo": "OPEN_APP",
+        "parametro": "com.whatsapp",
+        "texto_botao": "Abrir WhatsApp"
+    }
 }"""
         prompt = json.dumps({"categoria": categoria, "pacote": pacote, "payload": payload}, ensure_ascii=False, indent=2)
 
         try:
-            dados = self._gerar_json(prompt, system)
+            dados = await self._gerar_json(prompt, system)
             # Garante que os campos obrigatórios existam
             dados.setdefault("categoria_inferida", "DESCONHECIDA")
             dados.setdefault("confianca", 0.0)
-            dados.setdefault("mensagem_dinamica", None)
-            dados.setdefault("acao_necessaria", False)
+            dados.setdefault("mensagem_dinamica", "")
+            dados.setdefault("prioridade", "NORMAL") # Fallback de prioridade
+            dados.setdefault("tipo_interacao", "IGNORAR") # Fallback seguro
             dados.setdefault("contexto_extra", {})
+            dados.setdefault("acao_sugerida", None) # Ação é opcional
             return dados
         except Exception as e:
             logger.error(f"Erro ao classificar evento: {e}")
@@ -236,9 +232,11 @@ Formato:
             return {
                 "categoria_inferida": "ERRO",
                 "confianca": 0.0,
-                "mensagem_dinamica": None,
-                "acao_necessaria": False,
-                "contexto_extra": {"erro": str(e)}
+                "mensagem_dinamica": "",
+                "tipo_interacao": "IGNORAR",
+                "prioridade": "NORMAL",
+                "contexto_extra": {"erro": str(e)},
+                "acao_sugerida": None
             }
 
     async def resumir_perfil_usuario(self, dados_perfil_texto: str) -> dict:
@@ -261,7 +259,7 @@ Analise os seguintes fatos sobre o usuário e crie um resumo:
 {dados_perfil_texto}
 """
         try:
-            dados = self._gerar_json(prompt, system)
+            dados = await self._gerar_json(prompt, system)
             dados.setdefault("resumo", "Não foi possível gerar um resumo no momento.")
             return dados
         except Exception as e:
@@ -321,7 +319,7 @@ Esquema esperado:
 
         prompt = chave
 
-        return self._gerar_json(
+        return await self._gerar_json(
 
             prompt,
 

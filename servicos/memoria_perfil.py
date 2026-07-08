@@ -9,6 +9,7 @@ import math
 CATEGORIA_CONTATO = "CONTATO_INTERACAO"
 CATEGORIA_APP = "APP_USO"
 CATEGORIA_ARTISTA = "ARTISTA_PREFERENCIA"
+CATEGORIA_WIFI = "WIFI_CONEXAO"
 
 def _get_time_slot(timestamp: datetime) -> str:
     """Determina o período do dia com base no timestamp."""
@@ -60,6 +61,10 @@ class MemoriaPerfil:
     async def registrar_interacao_contato(self, remetente: str):
         """Registra uma interação com um contato."""
         await self._registrar_interacao(CATEGORIA_CONTATO, remetente)
+
+    async def registrar_conexao_wifi(self, ssid: str):
+        """Registra uma conexão a uma rede Wi-Fi."""
+        await self._registrar_interacao(CATEGORIA_WIFI, ssid)
 
     async def registrar_uso_app(self, pacote: str):
         """Registra o uso de um aplicativo."""

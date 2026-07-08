@@ -14,7 +14,7 @@ import json
 import logging
 
 from core.evento import EventoCanonico
-from core.tipos import PrioridadeEvento, OrigemEvento, TipoAcao
+from core.tipos import PrioridadeEvento, OrigemEvento, TipoAcao, CategoriaEvento
 from core.kernel import kernel
 from servicos.llm import ServicoLLM
 from servicos.memoria_episodica import MemoriaEpisodica
@@ -60,25 +60,47 @@ class AgenteRaciocinio:
                 )
                 return # O fluxo para aqui e será retomado quando o resultado da pesquisa chegar.
 
-        # 3. Se não precisa pesquisar, verifica se é necessário agir
-        elif resultado.get("acao_necessaria", False):
+        # 3. Se não precisa pesquisar, verifica o tipo de interação que a IA decidiu.
+        tipo_interacao = resultado.get("tipo_interacao")
+        if tipo_interacao == "NOTIFICAR":
+            # Apenas se a IA decidir explicitamente por uma notificação, o fluxo continua.
             mensagem = resultado.get("mensagem_dinamica")
-            if mensagem:
+            prioridade_str = resultado.get("prioridade", "NORMAL").upper()
+            try:
+                prioridade = PrioridadeEvento[prioridade_str]
+            except KeyError:
+                logger.warning(f"LLM retornou prioridade inválida '{prioridade_str}'. Usando NORMAL.")
+                prioridade = PrioridadeEvento.NORMAL
+
+            if mensagem and mensagem.strip():
+                # Prepara o payload da notificação
+                payload_notificacao = {
+                    "texto": mensagem,
+                    "titulo": "Assistente",
+                    "contexto": resultado.get("contexto_extra", {}),
+                    "remetente": evento.payload.get("titulo")
+                }
+
+                # Adiciona a ação sugerida pela IA, se houver
+                acao_sugerida = resultado.get("acao_sugerida")
+                if acao_sugerida and isinstance(acao_sugerida, dict):
+                    payload_notificacao["acao_tipo"] = acao_sugerida.get("tipo")
+                    payload_notificacao["acao_parametro"] = acao_sugerida.get("parametro")
+                    payload_notificacao["acao_texto"] = acao_sugerida.get("texto_botao")
+
                 # Publica um novo evento de INTENCAO_INTERACAO
                 evento_intencao = evento.clonar(
+                    categoria=CategoriaEvento.INTENCAO_NOTIFICACAO,
                     acao=TipoAcao.INTENCAO_INTERACAO,
                     origem=OrigemEvento.IA,
-                    payload={
-                        "mensagem": mensagem,
-                        "titulo": "Assistente",  # ou extraído do contexto
-                        "contexto": resultado.get("contexto_extra", {}),
-                        "remetente": evento.payload.get("titulo") # Passa o remetente original
-                    }
+                    prioridade=prioridade,
+                    payload=payload_notificacao
                 )
                 await kernel.publicar(evento_intencao)
                 logger.info(f"🧠 [Raciocínio] Gerada intenção: {mensagem[:50]}...")
         else:
-            logger.debug(f"🧠 [Raciocínio] Evento ignorado (sem ação necessária).")
+            # Se for ATUALIZACAO_SILENCIOSA ou IGNORAR, a ação termina aqui.
+            logger.info(f"🤫 [Raciocínio] Decisão da IA: {tipo_interacao}. Contexto atualizado sem notificação.")
 
     async def sintetizar_com_pesquisa(self, evento_resultado: EventoCanonico):
         """
@@ -112,7 +134,7 @@ class AgenteRaciocinio:
                 acao=TipoAcao.INTENCAO_INTERACAO,
                 origem=OrigemEvento.IA,
                 payload={
-                    "mensagem": resultado_sintese["mensagem_dinamica"],
+                    "texto": resultado_sintese["mensagem_dinamica"],
                     "titulo": "Assistente",
                 }
             )
