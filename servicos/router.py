@@ -7,15 +7,15 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 @router.get(
-    "/timeline",
+    "/",
     response_model=TimelineDTO,
-    summary="Retorna a linha do tempo inteligente de eventos",
+    summary="Retorna o histórico recente de eventos",
     tags=["Timeline"]
 )
 async def get_timeline():
     """
-    Endpoint que retorna uma lista de eventos recentes processados pelo
-    sistema, já transformados em uma narrativa para exibição no cliente.
+    Endpoint que retorna a timeline de eventos processados,
+    formatados como conhecimento para o usuário.
     """
     logger.info("Recebida requisição para GET /timeline")
     return await servico_timeline.gerar_timeline()

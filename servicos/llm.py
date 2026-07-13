@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 
 import httpx
 from modelos.catalogo import EntidadeSemantica
@@ -38,6 +39,26 @@ class ServicoLLM:
     # =====================================================
     # API PRIVADA
     # =====================================================
+
+    def _carregar_instrucoes_cognitivas(self) -> str:
+        """
+        Carrega o manifesto de capacidades e as regras de identidade do córtex.
+        Fonte da verdade: Documentação do projeto Android.
+        """
+        try:
+            # Caminho absoluto conforme definido no plano de implementação
+            base_path = "D:/Programacao/Projetos/AssistenteCell/app/src/docs"
+            
+            with open(os.path.join(base_path, "capabilities.md"), "r", encoding="utf-8") as f:
+                capabilities = f.read()
+            
+            with open(os.path.join(base_path, "llm.md"), "r", encoding="utf-8") as f:
+                llm_rules = f.read()
+                
+            return f"\n--- MANIFESTO DE CAPACIDADES ---\n{capabilities}\n\n--- REGRAS DE IDENTIDADE ---\n{llm_rules}\n"
+        except Exception as e:
+            logger.warning(f"Não foi possível carregar instruções cognitivas: {e}")
+            return ""
 
     async def _gerar_json(
         self,
@@ -160,9 +181,19 @@ Responda apenas JSON.
         - acao_necessaria: bool
         - contexto_extra: dict (opcional)
         """
-        system = """Você é o módulo de Cognição da assistente Ollie. Sua função é interpretar eventos e gerar uma resposta ESTRUTURADA em JSON.
+        instrucoes_extras = self._carregar_instrucoes_cognitivas()
+        
+        system_base = """Você é o módulo de Cognição da assistente Ollie. Sua função é interpretar eventos e gerar uma resposta ESTRUTURADA em JSON.
+
+### INSTRUÇÕES COGNITIVAS ADICIONAIS
+{instrucoes}
 
 Você recebe eventos que as camadas de Atenção e Reflexo não resolveram. O evento tem `categoria`, `pacote` e `payload`.
+
+### Nuances Culturais (Português do Brasil)
+- **CUIDADO COM LITERALIDADE**: Muitas expressões são idiomáticas. Antes de classificar algo como urgente ou um pedido de ajuda, analise o contexto.
+- **Exemplo de Ambiguidade**: A frase "isso ajuda demais" é um ELOGIO (significa "isso é muito útil/bom"), e **NÃO** um pedido de socorro.
+- **Tom da Conversa**: Avalie o tom geral da conversa (presente no `contexto_historico`) para entender a real intenção por trás das mensagens. Não isole palavras.
 
 ### Regras de Prioridade
 - **ALTA**: Mensagens diretas de uma pessoa (ex: WhatsApp, SMS de um contato). Notificações urgentes (ex: calendário, lembretes).
@@ -170,9 +201,11 @@ Você recebe eventos que as camadas de Atenção e Reflexo não resolveram. O ev
 - **BAIXA**: Notificações de redes sociais (likes, novos posts), promoções, notícias não urgentes.
 
 ### Regra de Interação (O mais importante!)
-Sua principal decisão é o "tipo_interacao".
-- **NOTIFICAR**: Use quando for a primeira vez que você vê um assunto, ou se uma informação MUITO importante e nova chegou. Esta ação gera uma notificação para o usuário.
-- **ATUALIZACAO_SILENCIOSA**: Use se as novas mensagens são apenas uma continuação de um tópico que você já resumiu nos últimos minutos (presente no "contexto_historico"). O sistema irá absorver a informação sem notificar o usuário, aguardando mais contexto. O objetivo é evitar notificar o usuário a cada 2 minutos sobre a mesma história em andamento.
+Sua principal decisão é o "tipo_interacao", mas você também pode (e deve) emitir uma "decisao" estruturada se identificar uma oportunidade de automação conforme o manifesto de capacidades.
+
+- **NOTIFICAR**: Use quando for a primeira vez que você vê um assunto, ou se uma informação MUITO importante e nova chegou.
+- **DECISAO_COGNITIVA**: Use quando você decidir agir no sistema (ex: ativar um perfil de foco, sugerir uma rotina). Você pode combinar isso com uma notificação.
+- **ATUALIZACAO_SILENCIOSA**: Use se as novas mensagens são apenas uma continuação de um tópico que você já resumiu nos últimos minutos.
 
 Se o `pre_resumo` contém "Você tem 12 mensagens...", é um forte indicador para usar "NOTIFICAR".
 Se o `pre_resumo` contém "Você tem 2 mensagens..." e o `contexto_historico` mostra que você já notificou sobre isso há pouco tempo, prefira "ATUALIZACAO_SILENCIOSA".
@@ -200,19 +233,21 @@ Sua tarefa principal é criar a "mensagem_dinamica". Siga esta hierarquia ESTRIT
 
 Retorne SOMENTE JSON válido.
 Formato:
-{
+{{
     "categoria_inferida": "MENSAGEM_PESSOAL",
     "confianca": 0.9,
     "prioridade": "ALTA",
     "tipo_interacao": "NOTIFICAR",
     "mensagem_dinamica": "Resumo da situação para o usuário.",
-    "contexto_extra": {},
-    "acao_sugerida": {
+    "contexto_extra": {{}},
+    "acao_sugerida": {{
         "tipo": "OPEN_APP",
         "parametro": "com.whatsapp",
         "texto_botao": "Abrir WhatsApp"
-    }
-}"""
+    }}
+}}"""
+        system = system_base.replace("{instrucoes}", instrucoes_extras)
+        
         prompt = json.dumps({"categoria": categoria, "pacote": pacote, "payload": payload}, ensure_ascii=False, indent=2)
 
         try:
@@ -241,30 +276,85 @@ Formato:
 
     async def resumir_perfil_usuario(self, dados_perfil_texto: str) -> dict:
         """
-        Recebe uma lista de fatos sobre o usuário e gera um resumo em linguagem natural.
+        Recebe uma lista de fatos sobre o usuário e gera uma lista de cards dinâmicos.
         """
-        system = """Você é um psicólogo e analista de comportamento.
-Sua tarefa é analisar uma lista de fatos brutos sobre um usuário e criar um resumo conciso e perspicaz sobre seus hábitos e personalidade.
+        instrucoes_extras = self._carregar_instrucoes_cognitivas()
+        
+        system_base = """Você é um assistente pessoal proativo e perspicaz chamado Ollie.
+Sua tarefa é analisar fatos sobre o uso do celular de um usuário e gerar uma LISTA de cards dinâmicos para a tela inicial.
 
-Seja direto e informativo. Use um tom amigável.
-O objetivo é mostrar ao usuário o que o sistema aprendeu sobre ele.
+### INSTRUÇÕES CRÍTICAS
+1. **NÃO USE PORCENTAGENS OU ESTATÍSTICAS TÉCNICAS.** O usuário quer auxílio e contexto, não um relatório de BI.
+2. **FOQUE NO AUXÍLIO**: Como esse dado ajuda o usuário? O que ele pode fazer com isso?
+3. **TOM DE VOZ**: Amigável, conciso e observador.
+4. **FORMATO**: Gere uma lista de objetos, cada um com um "tipo" (insight, dica, piada) e "conteudo".
 
-Responda APENAS com um JSON no seguinte formato:
-{
-    "resumo": "..."
-}"""
+### TIPOS DE CARDS
+- **insight**: Observações sobre padrões de comportamento (ex: "Você parece mais produtivo após ouvir música clássica").
+- **dica**: Sugestões acionáveis ou lembretes de bem-estar (ex: "Que tal uma pausa de 5 minutos para alongar?").
+- **piada**: Uma piada curta e leve relacionada a tecnologia ou ao dia a dia.
+
+### EXEMPLO DE RESPOSTA ESPERADA
+{{
+    "cards": [
+        {{
+            "tipo": "insight",
+            "conteudo": {{
+                "title": "Foco & Música",
+                "text": "Percebi que seu fluxo de trabalho no VS Code melhora quando você ouve Lo-fi. Quer que eu prepare o ambiente?"
+            }}
+        }},
+        {{
+            "tipo": "dica",
+            "conteudo": {{
+                "title": "Pausa Necessária",
+                "text": "Você está focado no WhatsApp há algum tempo. Uma breve caminhada pode te ajudar a clarear as ideias."
+            }}
+        }},
+        {{
+            "tipo": "piada",
+            "conteudo": {{
+                "text": "Por que o computador foi ao médico? Porque ele estava com um vírus de 'macro' proporções!"
+            }}
+        }}
+    ]
+}}
+
+### INSTRUÇÕES COGNITIVAS ADICIONAIS
+{instrucoes}
+
+Responda APENAS com um JSON válido seguindo a estrutura acima."""
+        system = system_base.replace("{instrucoes}", instrucoes_extras)
+
         prompt = f"""
-Analise os seguintes fatos sobre o usuário e crie um resumo:
+Analise os seguintes fatos sobre o usuário e gere os cards:
 
 {dados_perfil_texto}
 """
         try:
             dados = await self._gerar_json(prompt, system)
-            dados.setdefault("resumo", "Não foi possível gerar um resumo no momento.")
+            if "cards" not in dados or not isinstance(dados["cards"], list):
+                # Fallback se a LLM não seguir o formato de lista
+                resumo_texto = dados.get("resumo", "Sem insights no momento.")
+                return {
+                    "cards": [
+                        {
+                            "tipo": "insight",
+                            "conteudo": {"title": "Observação", "text": resumo_texto}
+                        }
+                    ]
+                }
             return dados
         except Exception as e:
-            logger.error(f"Erro ao resumir perfil de usuário: {e}")
-            return {"resumo": f"Ocorreu um erro ao tentar analisar o perfil: {e}"}
+            logger.error(f"Erro ao gerar cards de perfil: {e}")
+            return {
+                "cards": [
+                    {
+                        "tipo": "insight",
+                        "conteudo": {"text": "Estou observando seus padrões para te ajudar melhor em breve."}
+                    }
+                ]
+            }
 
     # =====================================================
     # CONTATOS

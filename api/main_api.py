@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.perfil import router as perfil_router
 from api.status import router as status_router
+from api.memoria import router as memoria_router
 from servicos.router import router as timeline_router
 from api.router import router as home_router
 
@@ -29,6 +30,7 @@ def criar_app_api():
     # Os demais endpoints servem as telas específicas
     app.include_router(perfil_router, prefix="/api/v1/perfil", tags=["Perfil"])
     app.include_router(status_router, prefix="/api/v1/status", tags=["Status"])
+    app.include_router(memoria_router, prefix="/api/v1/memory", tags=["Memória"])
     app.include_router(timeline_router, prefix="/api/v1/timeline", tags=["Timeline"])
 
     return app

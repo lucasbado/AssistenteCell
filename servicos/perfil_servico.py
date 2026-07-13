@@ -49,8 +49,14 @@ class ServicoPerfil:
         habitos_apps = await self._montar_habitos_app_dto(dados_agregados.get("apps", []))
         preferencias_musicais = await self._montar_preferencias_musicais_dto(dados_agregados.get("artistas", []))
 
+        # O campo 'resumo' agora pode ser um texto fixo ou o primeiro card de insight
+        resumo_texto = resumo_dict.get("resumo", "")
+        if not resumo_texto and resumo_dict.get("cards"):
+            resumo_texto = resumo_dict["cards"][0].get("conteudo", {}).get("text", "")
+
         return PerfilCognitivoDTO(
-            resumo_comportamental=resumo_dict.get("resumo", "N/A"),
+            resumo_comportamental=resumo_texto or "N/A",
+            cards_dinamicos=resumo_dict.get("cards", []),
             habitos_aplicativos=habitos_apps,
             preferencias_musicais=preferencias_musicais,
         )

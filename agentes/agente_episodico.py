@@ -1,6 +1,6 @@
-from __future__ import annotations
 from core.evento import EventoCanonico
 from servicos.memoria_episodica import MemoriaEpisodica
+from api.websocket import central_alertas
 
 class AgenteEpisodico:
     """
@@ -11,6 +11,10 @@ class AgenteEpisodico:
         self.memoria = MemoriaEpisodica()
 
     async def processar(self, evento: EventoCanonico):
-        # Fire-and-forget: delega para o serviço de banco assíncrono
-        # Como o Kernel usa asyncio.gather(), isto roda em paralelo e não atrasa os reflexos!
+        # 1. Salva na persistência (banco de dados)
         await self.memoria.arquivar_evento(evento)
+        
+        # 2. Transmite via WebSocket para atualização da Timeline em tempo real
+        # Filtramos eventos muito técnicos ou repetitivos para não poluir a UI
+        if evento.categoria.value not in ["SISTEMA_COMANDO_INTERNO"]:
+            await central_alertas.enviar_evento_log(evento.model_dump())

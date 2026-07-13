@@ -47,7 +47,20 @@ class AgenteRaciocinio:
             payload=evento.payload,
         )
 
-        # 2. Verifica se a LLM solicitou uma pesquisa na web
+        # 2. Verifica se a LLM emitiu uma Decisão Cognitiva (Automação)
+        if "decisao" in resultado:
+            logger.info(f"⚡ [Raciocínio] LLM emitiu uma DECISÃO: {resultado['decisao']}")
+            # Publica a decisão para que outros agentes (Foco, Música, Execução) possam reagir
+            await kernel.publicar(
+                evento.clonar(
+                    categoria=CategoriaEvento.SISTEMA_COMANDO_INTERNO,
+                    acao=TipoAcao.ATUALIZAR_CONTEXTO,
+                    origem=OrigemEvento.IA,
+                    payload=resultado
+                )
+            )
+
+        # 3. Verifica se a LLM solicitou uma pesquisa na web
         if resultado.get("contexto_extra", {}).get("precisa_pesquisar"):
             query = resultado.get("contexto_extra", {}).get("query")
             if query:

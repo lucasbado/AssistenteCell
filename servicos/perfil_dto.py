@@ -17,5 +17,6 @@ class PreferenciaMusicalDTO(BaseModel):
 class PerfilCognitivoDTO(BaseModel):
     """DTO principal para a tela de perfil do usuário."""
     resumo_comportamental: str = Field(..., description="Um resumo em linguagem natural sobre o perfil do usuário, gerado pela IA.")
+    cards_dinamicos: List[dict] = Field(default_factory=list, description="Lista de cards estruturados (insight, dica, piada) gerados pela LLM.")
     habitos_aplicativos: List[HabitoAppDTO] = Field(..., description="Lista dos aplicativos mais utilizados.")
     preferencias_musicais: List[PreferenciaMusicalDTO] = Field(..., description="Lista dos artistas mais ouvidos.")

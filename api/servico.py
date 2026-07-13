@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime
+from fastapi import Request
 
 # Importa os serviços existentes que serão orquestrados
 from servicos.perfil_servico import servico_perfil
@@ -9,9 +10,14 @@ from api.status import servico_status
 # Imports para a nova estrutura de cards
 from .dto import (
     HomeDTO,
+    ApiWeather,
     AnyCard,
+    ApiRecommendation,
     BoasVindasCard, BoasVindasContent,
     ResumoCognitivoCard, ResumoCognitivoContent,
+    InsightCard, InsightContent,
+    DicaCard, DicaContent,
+    PiadaCard, PiadaContent,
     TimelineCard, TimelineContent,
     StatusLLMCard
 )
@@ -31,12 +37,25 @@ class ServicoHome:
         else:
             return "Boa noite!"
 
-    async def gerar_home(self) -> HomeDTO:
+    async def gerar_home(self, request: Request) -> HomeDTO:
         """
         Chama outros serviços em paralelo e transforma seus resultados em uma
         lista de 'cards' que compõem a tela inicial.
         """
         # 1. Executa as chamadas de serviço em paralelo para máxima eficiência
+        # --- LÓGICA DO CLIMA ---
+        memoria = request.app.state.agente_memoria_trabalho
+        clima_interno = getattr(memoria, 'contexto_atual', None)
+        weather_dto = None
+        if clima_interno:
+            weather_dto = ApiWeather(
+                temperatura=clima_interno.get("temperatura"),
+                cidade="São Paulo",
+                condicao=clima_interno.get("condicao"),
+                icon_code=clima_interno.get("icon_code")
+            )
+        # --- FIM DA LÓGICA DO CLIMA ---
+
         perfil_task = servico_perfil.gerar_perfil_cognitivo()
         timeline_task = servico_timeline.gerar_timeline()
         status_task = servico_status.gerar_status_sistema()
@@ -48,9 +67,29 @@ class ServicoHome:
         # 2. Monta a lista de cards dinamicamente
         cards: list[AnyCard] = []
 
-        # Card de Resumo Cognitivo
-        if perfil_cognitivo and perfil_cognitivo.resumo_comportamental:
-            cards.append(ResumoCognitivoCard(conteudo=ResumoCognitivoContent(texto=perfil_cognitivo.resumo_comportamental)))
+        # Processa os cards dinâmicos gerados pela LLM (Insight, Dica, Piada)
+        if perfil_cognitivo and hasattr(perfil_cognitivo, "cards_dinamicos") and perfil_cognitivo.cards_dinamicos:
+            for card_data in perfil_cognitivo.cards_dinamicos:
+                tipo = card_data.get("tipo")
+                conteudo = card_data.get("conteudo", {})
+                
+                if tipo == "insight":
+                    cards.append(InsightCard(conteudo=InsightContent(**conteudo)))
+                elif tipo == "dica":
+                    cards.append(DicaCard(conteudo=DicaContent(**conteudo)))
+                elif tipo == "piada":
+                    cards.append(PiadaCard(conteudo=PiadaContent(**conteudo)))
+        
+        # Fallback para o resumo comportamental antigo se não houver cards novos
+        elif perfil_cognitivo and perfil_cognitivo.resumo_comportamental and perfil_cognitivo.resumo_comportamental != "N/A":
+             cards.append(
+                InsightCard(
+                    conteudo=InsightContent(
+                        title="Resumo",
+                        text=perfil_cognitivo.resumo_comportamental
+                    )
+                )
+            )
 
         # Card de Timeline
         if timeline and timeline.eventos:
@@ -76,6 +115,7 @@ class ServicoHome:
         # 3. Monta o DTO final da Home
         return HomeDTO(
             saudacao=self._gerar_saudacao(),
+            clima=weather_dto,
             cards=cards
         )
 

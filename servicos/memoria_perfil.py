@@ -3,13 +3,14 @@ from sqlalchemy.future import select
 from banco.database import AsyncSessionLocal
 from banco.models import PerfilUsuarioDB
 from datetime import datetime, timezone
-import math 
+import math
 
 # Categorias para o perfil de usuário
 CATEGORIA_CONTATO = "CONTATO_INTERACAO"
 CATEGORIA_APP = "APP_USO"
 CATEGORIA_ARTISTA = "ARTISTA_PREFERENCIA"
 CATEGORIA_WIFI = "WIFI_CONEXAO"
+
 
 def _get_time_slot(timestamp: datetime) -> str:
     """Determina o período do dia com base no timestamp."""
@@ -22,8 +23,11 @@ def _get_time_slot(timestamp: datetime) -> str:
         return "NOITE"
     return "MADRUGADA"
 
+
 class MemoriaPerfil:
-    async def _registrar_interacao(self, categoria: str, valor: str, score_increment: int = 1):
+    async def _registrar_interacao(
+        self, categoria: str, valor: str, score_increment: int = 1
+    ):
         """
         Método genérico para registrar uma interação, incrementando seu score e confiança.
         Este é o núcleo do aprendizado.
@@ -33,8 +37,7 @@ class MemoriaPerfil:
 
         async with AsyncSessionLocal() as session:
             stmt = select(PerfilUsuarioDB).where(
-                PerfilUsuarioDB.categoria == categoria,
-                PerfilUsuarioDB.valor == valor
+                PerfilUsuarioDB.categoria == categoria, PerfilUsuarioDB.valor == valor
             )
             resultado = await session.execute(stmt)
             perfil_db = resultado.scalars().first()
@@ -46,14 +49,16 @@ class MemoriaPerfil:
                     categoria=categoria,
                     valor=valor,
                     score=score_increment,
-                    confianca=0.1, # Começa com uma confiança baixa
+                    confianca=0.1,  # Começa com uma confiança baixa
                 )
                 session.add(perfil_db)
 
             # Lógica para atualizar a confiança baseada no número de interações
             # A base do log (20) define quão rápido a confiança cresce.
             # log20(1) ~= 0, log20(20) = 1. São necessárias ~19 interações para atingir 1.0.
-            perfil_db.confianca = min(round(math.log(perfil_db.score + 1) / math.log(20), 2), 1.0)
+            perfil_db.confianca = min(
+                round(math.log(perfil_db.score + 1) / math.log(20), 2), 1.0
+            )
             perfil_db.ultima_atualizacao = datetime.now(timezone.utc)
 
             await session.commit()
@@ -69,7 +74,7 @@ class MemoriaPerfil:
     async def registrar_uso_app(self, pacote: str):
         """Registra o uso de um aplicativo."""
         await self._registrar_interacao(CATEGORIA_APP, pacote)
- 
+
     async def registrar_escuta_artista(self, artista: str, timestamp: datetime):
         """Registra a escuta de um artista musical, associando ao horário."""
         time_slot = _get_time_slot(timestamp)
@@ -83,7 +88,9 @@ class MemoriaPerfil:
             perfis = await self.obter_perfis_artista(valor)
             for perfil in perfis:
                 # Penalidade forte para desincentivar rapidamente.
-                await self._registrar_interacao(perfil.categoria, valor, score_increment=-5)
+                await self._registrar_interacao(
+                    perfil.categoria, valor, score_increment=-5
+                )
         else:
             await self._registrar_interacao(categoria_base, valor, score_increment=-5)
 
@@ -94,7 +101,9 @@ class MemoriaPerfil:
             perfis = await self.obter_perfis_artista(valor)
             if perfis:
                 for perfil in perfis:
-                    await self._registrar_interacao(perfil.categoria, valor, score_increment=2)
+                    await self._registrar_interacao(
+                        perfil.categoria, valor, score_increment=2
+                    )
             else:
                 # Se não há perfil, cria um para o horário atual como ponto de partida.
                 await self.registrar_escuta_artista(valor, datetime.now(timezone.utc))
@@ -105,8 +114,7 @@ class MemoriaPerfil:
         """Método genérico para obter dados de perfil."""
         async with AsyncSessionLocal() as session:
             stmt = select(PerfilUsuarioDB).where(
-                PerfilUsuarioDB.categoria == categoria,
-                PerfilUsuarioDB.valor == valor
+                PerfilUsuarioDB.categoria == categoria, PerfilUsuarioDB.valor == valor
             )
             resultado = await session.execute(stmt)
             return resultado.scalars().first()
@@ -134,31 +142,60 @@ class MemoriaPerfil:
         async with AsyncSessionLocal() as session:
             stmt = select(PerfilUsuarioDB).where(
                 PerfilUsuarioDB.categoria.like(f"{CATEGORIA_ARTISTA}_%"),
-                PerfilUsuarioDB.valor == nome_artista
+                PerfilUsuarioDB.valor == nome_artista,
             )
             resultado = await session.execute(stmt)
             return resultado.scalars().all()
 
-    async def obter_item_mais_frequente_por_periodo(self, categoria_base: str, periodo: str) -> str | None:
+    async def obter_item_mais_frequente_por_periodo(
+        self, categoria_base: str, periodo: str
+    ) -> str | None:
         """
         Busca o item com maior score para uma dada categoria e período.
         Ex: (ARTISTA_PREFERENCIA, MANHA) -> 'Staind'
         """
         categoria_completa = f"{categoria_base}_{periodo}"
         async with AsyncSessionLocal() as session:
-            stmt = select(PerfilUsuarioDB).where(
-                PerfilUsuarioDB.categoria == categoria_completa
-            ).order_by(PerfilUsuarioDB.score.desc()).limit(1)
+            stmt = (
+                select(PerfilUsuarioDB)
+                .where(PerfilUsuarioDB.categoria == categoria_completa)
+                .order_by(PerfilUsuarioDB.score.desc())
+                .limit(1)
+            )
             resultado = await session.execute(stmt)
             perfil_db = resultado.scalars().first()
             return perfil_db.valor if perfil_db else None
 
-    async def obter_perfil_completo(self, confianca_minima: float = 0.5) -> list[PerfilUsuarioDB]:
+    async def obter_perfil_completo(
+        self, confianca_minima: float = 0.5
+    ) -> list[PerfilUsuarioDB]:
         """Obtém todos os fatos aprendidos sobre o usuário com uma confiança mínima."""
         async with AsyncSessionLocal() as session:
-            stmt = select(PerfilUsuarioDB).where(
-                PerfilUsuarioDB.confianca >= confianca_minima
-            ).order_by(PerfilUsuarioDB.categoria, PerfilUsuarioDB.confianca.desc())
+            stmt = (
+                select(PerfilUsuarioDB)
+                .where(PerfilUsuarioDB.confianca >= confianca_minima)
+                .order_by(PerfilUsuarioDB.categoria, PerfilUsuarioDB.confianca.desc())
+            )
+            resultado = await session.execute(stmt)
+            return resultado.scalars().all()
+
+    async def obter_top_entidades(
+        self, categoria: str = None, limite: int = 5
+    ) -> list[PerfilUsuarioDB]:
+        """
+        Obtém as entidades/hábitos com maior score geral para gerar resumos,
+        podendo filtrar por uma categoria específica.
+        """
+        async with AsyncSessionLocal() as session:
+            stmt = select(PerfilUsuarioDB)
+
+            # Se o agregador pedir uma categoria específica, nós filtramos
+            if categoria:
+                # Usamos o .like() para cobrir subcategorias (ex: ARTISTA_PREFERENCIA_MANHA)
+                stmt = stmt.where(PerfilUsuarioDB.categoria.like(f"{categoria}%"))
+
+            stmt = stmt.order_by(PerfilUsuarioDB.score.desc()).limit(limite)
+
             resultado = await session.execute(stmt)
             return resultado.scalars().all()
 

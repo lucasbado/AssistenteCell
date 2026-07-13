@@ -13,4 +13,7 @@ class TimelineItemDTO(BaseModel):
 
 class TimelineDTO(BaseModel):
     """DTO principal para a tela de timeline."""
-    eventos: List[TimelineItemDTO]
+    eventos: List[TimelineItemDTO] = Field(..., serialization_alias="events")
+    
+    class Config:
+        populate_by_name = True

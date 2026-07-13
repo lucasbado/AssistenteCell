@@ -11,7 +11,7 @@ import asyncio
 from datetime import datetime
 
 from core.evento import EventoCanonico
-from core.tipos import PrioridadeEvento, TipoAcao, CategoriaEvento
+from core.tipos import PrioridadeEvento, TipoAcao, CategoriaEvento, OrigemEvento
 from core.kernel import kernel
 from servicos.catalogo_semantico import catalogo
 from servicos.memoria_perfil import memoria_perfil
@@ -33,8 +33,19 @@ def _get_time_slot(timestamp: datetime) -> str:
 
 
 class AgenteFoco:
+    def __init__(self):
+        self._local_atual = None
+
     async def processar(self, evento: EventoCanonico):
+        # Escuta mudanças de local enviadas pelo ContextoSistema
+        if evento.categoria == CategoriaEvento.SISTEMA_COMANDO_INTERNO and evento.payload.get("tipo") == "MUDANCA_LOCAL":
+            self._local_atual = evento.payload.get("local")
+            return
+
         # MENSAGEM DE RASTREAMENTO IMEDIATA
+        if evento.categoria != CategoriaEvento.APP_FOREGROUND:
+            return
+
         print(
             f"🎯 [AGENTE FOCO] Acordei! Fui chamado pelo Kernel para analisar o app: {evento.pacote}"
         )
@@ -55,7 +66,33 @@ class AgenteFoco:
             self._inferir_sugestao_contextual(evento, entidade_app),
             self._inferir_bem_estar(evento, entidade_app),
             self._inferir_app_favorito(evento, perfil_app),
+            self._inferir_trabalho_vs_lazer(evento, entidade_app)
         )
+
+    async def _inferir_trabalho_vs_lazer(self, evento: EventoCanonico, entidade: EntidadeSemantica | None):
+        if not entidade or not self._local_atual:
+            return
+
+        categoria = entidade.atributos.get("categoria", "").lower()
+        
+        # Se estou no TRABALHO e abro algo de LAZER
+        if self._local_atual == "TRABALHO" and any(c in categoria for c in ["social", "jogos", "entretenimento"]):
+            logger.info("💡 AgenteFoco: Detectado app de lazer no trabalho.")
+            # Disparar um insight suave (que aparecerá na Home)
+            await kernel.publicar(
+                evento.clonar(
+                    id=None,
+                    categoria=CategoriaEvento.INSIGHT_MEMORIA, # Para ser salvo e aparecer na Home depois
+                    acao=TipoAcao.NORMAL,
+                    payload={
+                        "tipo": "insight",
+                        "conteudo": {
+                            "title": "Foco no Trabalho",
+                            "text": "Notei que você costuma ser mais produtivo quando evita distrações agora. Quer ajuda para focar?"
+                        }
+                    }
+                )
+            )
 
     async def _inferir_sugestao_contextual(
         self, evento: EventoCanonico, entidade_app: EntidadeSemantica | None
@@ -92,6 +129,7 @@ class AgenteFoco:
                 evento.clonar(
                     categoria=CategoriaEvento.INTENCAO_NOTIFICACAO,
                     acao=TipoAcao.INTENCAO_INTERACAO,
+                    origem=OrigemEvento.IA,
                     prioridade=PrioridadeEvento.NORMAL,
                     payload={
                         "titulo": "Sugestão Musical",
@@ -117,6 +155,7 @@ class AgenteFoco:
                 evento.clonar(
                     categoria=CategoriaEvento.INTENCAO_NOTIFICACAO,
                     acao=TipoAcao.INTENCAO_INTERACAO,
+                    origem=OrigemEvento.IA,
                     prioridade=PrioridadeEvento.ALTA,
                     payload={
                         "titulo": "Bem-estar",
@@ -137,6 +176,7 @@ class AgenteFoco:
                 evento.clonar(
                     categoria=CategoriaEvento.INTENCAO_NOTIFICACAO,
                     acao=TipoAcao.INTENCAO_INTERACAO,
+                    origem=OrigemEvento.IA,
                     prioridade=PrioridadeEvento.BAIXA,
                     payload={
                         "titulo": "Assistente de Hábitos",

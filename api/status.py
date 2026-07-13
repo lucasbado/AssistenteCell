@@ -62,7 +62,7 @@ servico_status = ServicoStatus()
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-@router.get("/status", response_model=StatusSistemaDTO, summary="Retorna o status operacional do sistema", tags=["Status"])
+@router.get("/", response_model=StatusSistemaDTO, summary="Retorna o status operacional do sistema", tags=["Status"])
 async def get_status():
     """
     Endpoint que fornece uma visão geral do estado de saúde dos
